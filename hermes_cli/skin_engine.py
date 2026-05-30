@@ -98,7 +98,8 @@ USAGE
 BUILT-IN SKINS
 ==============
 
-- ``default`` — Classic Hermes gold/kawaii (the current look)
+- ``default`` — Blue ink — cool navy and icy highlights
+- ``hermes``  — Classic Hermes gold/kawaii (the original look)
 - ``ares``    — Crimson/bronze war-god theme with custom spinner wings
 - ``mono``    — Clean grayscale monochrome
 - ``slate``   — Cool blue developer-focused theme
@@ -164,6 +165,78 @@ class SkinConfig:
 _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
     "default": {
         "name": "default",
+        "description": "Blue ink — cool navy and icy highlights",
+        "colors": {
+            "banner_border": "#1E3F6E",
+            "banner_title": "#A0CCEE",
+            "banner_accent": "#5A9ACB",
+            "banner_dim": "#2A4668",
+            "banner_text": "#C8E4F8",
+            "ui_accent": "#5A9ACB",
+            "ui_label": "#7AADD8",
+            "ui_ok": "#4caf50",
+            "ui_error": "#ef5350",
+            "ui_warn": "#ffa726",
+            "prompt": "#C8E4F8",
+            "input_rule": "#1E3F6E",
+            "response_border": "#4A82BA",
+            "status_bar_bg": "#19304E",
+            "status_bar_text": "#B8D4EC",
+            "status_bar_strong": "#A0CCEE",
+            "status_bar_dim": "#2A4668",
+            "status_bar_good": "#4caf50",
+            "status_bar_warn": "#ffa726",
+            "status_bar_bad": "#FF8C00",
+            "status_bar_critical": "#FF6B6B",
+            "session_label": "#7AADD8",
+            "session_border": "#2A4668",
+        },
+        "spinner": {
+            "waiting_faces": ["(◈)", "(◉)", "(◦)", "(◌)", "(⊙)"],
+            "thinking_faces": ["(◈)", "(⊙)", "(◉)", "(◌)", "(◦)"],
+            "thinking_verbs": [
+                "reading", "parsing", "mapping", "tracing", "scanning",
+                "indexing", "noting", "resolving",
+            ],
+            "wings": [
+                ["⟨◈", "◈⟩"],
+                ["⟨⊙", "⊙⟩"],
+                ["⟨◌", "◌⟩"],
+                ["⟨◉", "◉⟩"],
+            ],
+        },
+        "branding": {
+            "agent_name": "Sou",
+            "welcome": "Welcome back~ | Type your message or /help for commands.",
+            "goodbye": "See you soon~ ◈",
+            "response_label": " ◈ Sou ",
+            "prompt_symbol": "◈",
+            "help_header": "(◈) Available Commands",
+        },
+        "tool_prefix": "┊",
+        "banner_logo": """\
+[bold #C8E4F8]  ▄▄▄▄▄                               ▄▄                          [/]
+[bold #A0CCEE] ██▀▀▀▀█▄                           ▄█▀▀█▄                     █▄ [/]
+[#7AADD8] ▀██▄  ▄▀                           ██  ██      ▄▄       ▄    ▄██▄[/]
+[#5A9ACB]   ▀██▄▄  ▄███▄ ██ ██  ▄▀▀▄  ▄      ██▀▀██   ▄████ ▄█▀█▄ ████▄ ██ [/]
+[#3A6EA5] ▄   ▀██▄ ██ ██ ██ ██  ▀  ▀▄▄▀    ▄ ██  ██   ██ ██ ██▄█▀ ██ ██ ██ [/]
+[#2A5282] ▀██████▀▄▀███▀▄▀██▀█             ▀██▀  ▀█▄█▄▀████▄▀█▄▄▄▄██ ▀█▄██ [/]
+[#1E3F6E]                                                ██                [/]
+[#1E3F6E]                                              ▀▀▀                 [/]""",
+        "banner_hero": """\
+[#3A6EA5]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣶⠾⠿⠿⠯⣷⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#2A5282]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣼⣾⠛⠁⠀⠀⠀⠀⠀⠀⠈⢻⣦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#4A82BA]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣾⠿⠁⠀⠀⠀⢀⣤⣾⣟⣛⣛⣶⣬⣿⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#5A9ACB]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣾⠟⠃⠀⠀⠀⠀⠀⣾⣿⠟⠉⠉⠉⠉⠛⠿⠟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#4A82BA]⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⡟⠋⠀⠀⠀⠀⠀⠀⠀⣿⡏⣤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#5A9ACB]⠀⠀⠀⠀⠀⠀⠀⣠⡿⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⣷⡍⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣤⣤⣤⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#7AADD8]⠀⠀⠀⠀⠀⣠⣼⡏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⠷⣤⣤⣠⣤⣤⡤⡶⣶⢿⠟⠹⠿⠄⣿⣿⠏⠀⣀⣤⡦⠀⠀⠀⠀⣀⡄[/]
+[#A0CCEE]⢀⣄⣠⣶⣿⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠓⠚⠋⠉⠀⠀⠀⠀⠀⠀⠈⠛⡛⡻⠿⠿⠙⠓⢒⣺⡿⠋⠁[/]
+[#2A5282]⠉⠉⠉⠛⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠉⠁⠀[/]
+[dim #1E3F6E]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀Sou online~⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]""",
+    },
+    "hermes": {
+        "name": "hermes",
         "description": "Classic Hermes — gold and kawaii",
         "colors": {
             "banner_border": "#CD7F32",
