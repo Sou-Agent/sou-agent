@@ -22,9 +22,13 @@ Output contract (WakeDecision)::
 import json
 import logging
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_AUTONOMY_LOG_DIR = Path.home() / ".hermes" / "autonomy" / "logs"
 
 _SYSTEM = (
     "You are the autonomy triage layer for an autonomous agent. Every few minutes you "
@@ -142,6 +146,48 @@ def build_aux_prompt(snapshot: Dict[str, Any]) -> str:
 _DEFAULT_DECISION = {"wake": False, "session_type": "inward", "reason": "", "signals": []}
 
 
+# ---------------------------------------------------------------------------
+# Debug logging — dump prompt + raw response on failure
+# ---------------------------------------------------------------------------
+
+
+def _dump_autonomy_log(prompt: str, raw_response: str = "", error: str = "") -> None:
+    """Save prompt, raw response, and error to ~/.hermes/autonomy/logs/{timestamp}.md.
+
+    Intended for debugging aux model failures — the same way cron jobs dump
+    their output to ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+    """
+    _AUTONOMY_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = _AUTONOMY_LOG_DIR / f"aux_{ts}.md"
+    parts = [f"# Autonomy Aux Log — {ts}"]
+    if error:
+        parts.append("")
+        parts.append("## Error")
+        parts.append(error)
+    parts.append("")
+    parts.append("## System Prompt")
+    parts.append("```")
+    parts.append(_SYSTEM)
+    parts.append("```")
+    parts.append("")
+    parts.append("## User Prompt")
+    parts.append("```")
+    parts.append(prompt)
+    parts.append("```")
+    parts.append("")
+    parts.append("## Raw Response")
+    parts.append("```")
+    parts.append(str(raw_response) if raw_response else "(no response received)")
+    parts.append("```")
+    path.write_text("\n".join(parts) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Wake decision parsing
+# ---------------------------------------------------------------------------
+
+
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     if not text:
         return None
@@ -208,6 +254,7 @@ def decide_wake(snapshot: Dict[str, Any], aux_config: Optional[Dict[str, Any]] =
     prompt = build_aux_prompt(snapshot)
     logger.debug("autonomy aux prompt:\n%s", prompt)
 
+    raw_response = ""
     try:
         from agent import auxiliary_client
         resp = auxiliary_client.call_llm(
@@ -224,12 +271,18 @@ def decide_wake(snapshot: Dict[str, Any], aux_config: Optional[Dict[str, Any]] =
             max_tokens=800,
             timeout=aux_config.get("timeout"),
         )
-        content = resp.choices[0].message.content or ""
+        raw_response = resp.choices[0].message.content or ""
     except Exception:
         logger.exception("autonomy aux: model call failed; defaulting to no-wake")
+        _dump_autonomy_log(prompt, raw_response=raw_response, error="model call failed")
         return dict(_DEFAULT_DECISION)
 
-    decision = parse_wake_decision(content)
+    decision = parse_wake_decision(raw_response)
+
+    # Log when the model returned something but it wasn't valid JSON
+    if not isinstance(_extract_json(raw_response), dict):
+        _dump_autonomy_log(prompt, raw_response=raw_response, error="unparseable — model output did not contain valid JSON")
+
     logger.info(
         "autonomy aux decision: wake=%s type=%s signals=%d reason=%s",
         decision["wake"], decision["session_type"], len(decision["signals"]), decision["reason"][:80],
