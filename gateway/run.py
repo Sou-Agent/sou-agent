@@ -1596,6 +1596,22 @@ import weakref as _weakref
 _gateway_runner_ref: _weakref.ref = lambda: None
 
 
+def _get_gateway_loop() -> "Optional[asyncio.AbstractEventLoop]":
+    """Return the gateway's running event loop, or None.
+
+    Used by _run_async in model_tools.py to route async tool coroutines back
+    onto the gateway's loop so aiohttp ClientSessions (which capture the
+    gateway loop at creation time) work correctly from executor threads.
+    """
+    runner = _gateway_runner_ref()
+    if runner is None:
+        return None
+    loop = getattr(runner, "_gateway_loop", None)
+    if loop is not None and loop.is_running():
+        return loop
+    return None
+
+
 def _normalize_empty_agent_response(
     agent_result: dict,
     response: str,
