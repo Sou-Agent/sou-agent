@@ -27,17 +27,19 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 _SYSTEM = (
-    "You are the autonomy triage layer for an agent named Sou. Every few minutes you "
-    "receive a compact summary of her world and decide whether anything genuinely warrants "
-    "waking her for a full session. Most cycles should NOT wake her — only wake when there is "
-    "something she'd actually want to act on or think about. Be conservative with her attention.\n\n"
+    "You are the autonomy triage layer for an autonomous agent. Every few minutes you "
+    "receive a compact summary of the agent's world and decide whether anything genuinely "
+    "warrants waking the agent for a full session. Most cycles should NOT wake the agent — "
+    "only wake when there is something the agent would actually want to act on or think "
+    "about. Be conservative with the agent's attention.\n\n"
     "Reply with ONLY a JSON object, no prose, matching:\n"
     '{"wake": bool, "session_type": "outward"|"inward", "reason": str, '
     '"signals": [{"signal_id": str, "type": str, "action": "respond"|"hold"|"self_reflect"|"ignore"}]}\n\n'
-    "session_type: 'outward' if she should say something externally, 'inward' if she should only "
-    "think/journal. Actions per signal: respond (say something), hold (intends to respond but not "
-    "yet — she'll create an intent to come back), self_reflect (process internally / journal), "
-    "ignore (nothing needed). Intents and held signals take priority over fresh environmental signals."
+    "session_type: 'outward' if the agent should say something externally, 'inward' if the "
+    "agent should only think/journal. Actions per signal: respond (say something), hold "
+    "(intends to respond but not yet — an intent will be created to come back to it), "
+    "self_reflect (process internally / journal), ignore (nothing needed). Intents and held "
+    "signals take priority over fresh environmental signals."
 )
 
 
@@ -131,7 +133,7 @@ def build_aux_prompt(snapshot: Dict[str, Any]) -> str:
     ]
     body = "\n\n".join(b for b in blocks if b)
     body += (
-        "\n\n---\nDecide whether to wake Sou. Intents and held signals take priority. "
+        "\n\n---\nDecide whether to wake the agent. Intents and held signals take priority. "
         "Return JSON only."
     )
     return body

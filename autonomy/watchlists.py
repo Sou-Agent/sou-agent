@@ -8,8 +8,8 @@ them.
 
 Person entry::
 
-    name: Bailey
-    contact: Bailey            # resolves via contacts.json
+    name: user-friendly name, e.g. "Alice Smith"
+    contact: user-friendly contact name, e.g. "alice"  # resolves via contacts.json
     watch: true
     silence_threshold_hours: 36   # optional per-person override
     last_seen: 2026-05-30T14:00:00Z
@@ -18,7 +18,7 @@ Person entry::
 Channel entry::
 
     channel_id: "123456789"
-    name: homebase-general
+    name: general
     watch: true
     description: "..."
     notes: "..."
