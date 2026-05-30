@@ -57,7 +57,7 @@ _SYSTEM = (
     "Action meanings:\n"
     "- respond      — the agent should say something externally\n"
     "- hold         — intends to respond but not yet; create an intent to come back\n"
-    "- self_reflect — process internally / journal\n"
+    "- self_reflect — agent must use journal tools (write, append, read, prune)\n"
     "- ignore       — nothing needed\n\n"
 
     "Intents and held signals take priority over fresh environmental signals.\n"

@@ -304,6 +304,23 @@ def _journal_list(args: Dict, **_) -> str:
     return json.dumps({"section": section, "count": len(entries), "entries": entries})
 
 
+def _journal_remove(args: Dict, **_) -> str:
+    section = _sanitize_section(args.get("section") or "")
+    if not section:
+        return json.dumps({"error": "section is required"})
+    entry_id = (args.get("entry_id") or "").strip()
+    if not entry_id:
+        return json.dumps({"error": "entry_id is required"})
+
+    with _JOURNAL_LOCK:
+        path = _find_entry(section, entry_id)
+        if path is None:
+            return json.dumps({"error": f"entry '{entry_id}' not found in section '{section}'"})
+        path.unlink()
+
+    return json.dumps({"removed": True, "section": section, "entry_id": path.stem})
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -314,6 +331,7 @@ _ACTIONS = {
     "journal_search": _journal_search,
     "journal_append": _journal_append,
     "journal_list": _journal_list,
+    "journal_remove": _journal_remove,
 }
 
 
@@ -341,7 +359,7 @@ _SCHEMA = {
         "Your persistent journal. Write and read timestamped entries grouped into "
         "sections (e.g. " + ", ".join(_COMMON_SECTIONS) + "). Handles paths, filenames, "
         "and timestamps for you — just say what to write and where. "
-        "Actions: journal_write, journal_read, journal_search, journal_append, journal_list."
+        "Actions: journal_write, journal_read, journal_search, journal_append, journal_list, journal_remove."
     ),
     "parameters": {
         "type": "object",
@@ -354,7 +372,7 @@ _SCHEMA = {
             "section": {
                 "type": "string",
                 "description": (
-                    "[journal_write, journal_append] required; [journal_read, journal_list] optional. "
+                    "[journal_write, journal_append] required; [journal_read, journal_list, journal_remove] optional. "
                     "Section name (a single folder, e.g. 'feelings'). For read/list, omit to read MAIN.md "
                     "or list all sections."
                 ),

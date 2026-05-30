@@ -156,8 +156,13 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
         "  discord_send(session_id='...', message='...')  — send to a Discord channel/DM",
         "  discord_dm(user='...', message='...')             — send a Discord DM",
         "  send_into_session(ref='...', message='...')       — send into a prepared session",
-        "  journal(section='...', content='...')              — write to your journal",
-        "  intents(action='create', ...)                      — record an intent for later",
+        "  journal(action='journal_write', section='...', ...)  — write to your journal",
+        "  journal(action='journal_read', ...)                  — read journal entries",
+        "  journal(action='journal_search', ...)                — search journal entries",
+        "  journal(action='journal_append', ...)                — append to existing entry",
+        "  journal(action='journal_remove', ...)                — delete a journal entry",
+        "  journal(action='journal_list', ...)                  — list sections/entries",
+        "  intents(action='intent_add', ...)                    — record an intent for later",
         "",
         "If you decided a signal should get a 'respond' action, you MUST actually",
         "call one of the send tools above. Writing the response as your final",
@@ -180,8 +185,8 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
 
     lines += [
         "",
-        "--- SIGNAL CONTEXT ---",
-        "The aux model decided each signal's action. Context from the collector:",
+        "--- SIGNALS ---",
+        "Each signal block has context + the action-specific guidance right below it.",
         "",
     ]
 
@@ -200,17 +205,35 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
         lines.append(f"  Reason: {s.get('content_summary', '')}")
         lines.append("")
 
+        if action == "respond":
+            lines += [
+                "    => ACTION: RESPOND — STAYING SILENT IS NOT AN OPTION.",
+                "       You MUST call a send tool. Use send_into_session(ref=...)",
+                "       with one of the refs above, or discord_send/discord_dm with",
+                "       the session_id from the prepared session.",
+                "",
+            ]
+        elif action == "hold":
+            lines += [
+                "    => ACTION: HOLD — Create an intent with origin='hold' and",
+                "       source_signal_id set. You'll come back to this on the next cycle.",
+                "       If there's something concrete to follow up on, add it as an intent.",
+                "",
+            ]
+        elif action == "self_reflect":
+            lines += [
+                "    => ACTION: SELF_REFLECT — You MUST use your journal tools.",
+                "       journal_read to re-engage with old entries.",
+                "       journal_write to capture new thoughts.",
+                "       journal_append to develop existing ideas.",
+                "       journal_remove to clean up stale entries.",
+                "       journal_search to find relevant entries across sections.",
+                "       No journal interaction = you didn't do the task.",
+                "       If a follow-up emerges, create an intent (origin='self_reflect').",
+                "",
+            ]
+
     lines += [
-        "--- GUIDANCE ---",
-        "  respond      — STAYING SILENT IS NOT AN OPTION. You MUST call a send tool.",
-        "                 Use send_into_session(ref=...) with one of the refs above, or",
-        "                 discord_send/discord_dm with the session_id from the prepared session.",
-        "  hold         — Record an intent with origin='hold' and source_signal_id set.",
-        "                 You'll come back to this on the next cycle.",
-        "  self_reflect — Journal about it. Write to journal/thoughts/ or deal with it internally.",
-        "  ignore       — No action needed.",
-        "",
-        "If nothing needs doing, just note that and end.",
         "Privacy: only explicit send tool calls reach anyone. Everything else stays private.",
     ]
     return "\n".join(lines)
