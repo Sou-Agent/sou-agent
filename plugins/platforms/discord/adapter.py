@@ -561,32 +561,100 @@ _CONTACTS_LOCK = threading.Lock()
 
 
 def _maybe_register_contact(source: Any) -> None:
-    """Silently add a new Discord user to contacts.json on first contact.
+    """Silently add/update a Discord user in contacts.json on first contact.
 
-    Skips bots, skips users already present. Never overwrites existing entries.
+    Checks by:
+      1. platforms.discord.user_id (new format)
+      2. top-level user_id (legacy format)
+      3. aliases matching the current user_id or username
+    If found, merges into the existing contact (migrates legacy → new format).
+    Skips bots.
     """
     if getattr(source, "is_bot", False) or not getattr(source, "user_id", None):
         return
     discord_user_id = str(source.user_id)
+    discord_username = source.user_name or ""
+
+    import uuid as _uuid
+    from datetime import datetime as _dt, timezone as _tz
+
     with _CONTACTS_LOCK:
         try:
             data = json.loads(_CONTACTS_PATH.read_text()) if _CONTACTS_PATH.exists() else {"version": 1, "contacts": []}
         except (json.JSONDecodeError, OSError):
             data = {"version": 1, "contacts": []}
-        for contact in data.get("contacts", []):
-            if contact.get("platforms", {}).get("discord", {}).get("user_id") == discord_user_id:
-                return
-        import uuid as _uuid
-        from datetime import datetime as _dt, timezone as _tz
+
+        contacts = data.setdefault("contacts", [])
+        target = None
+
+        # Strategy 1: platforms.discord.user_id match (new format)
+        for c in contacts:
+            if c.get("platforms", {}).get("discord", {}).get("user_id") == discord_user_id:
+                target = c
+                break
+
+        # Strategy 2: top-level user_id (legacy format — migrate on update)
+        if target is None:
+            for c in contacts:
+                if str(c.get("user_id", "")) == discord_user_id:
+                    target = c
+                    break
+
+        # Strategy 3: alias matches username
+        if target is None and discord_username:
+            for c in contacts:
+                if c.get("name", "") == discord_username:
+                    target = c
+                    break
+                for a in c.get("aliases", []):
+                    if a == discord_username:
+                        target = c
+                        break
+                if target:
+                    break
+
+        if target:
+            # Migrate legacy format if needed
+            legacy_id = target.get("user_id")
+            if legacy_id and "platforms" not in target:
+                target["platforms"] = {}
+            platforms = target.setdefault("platforms", {})
+            current_discord = platforms.get("discord", {})
+            if current_discord:
+                # Update username if changed, keep existing user_id
+                if discord_username and current_discord.get("username") != discord_username:
+                    current_discord["username"] = discord_username
+            else:
+                platforms["discord"] = {
+                    "user_id": discord_user_id,
+                    "username": discord_username,
+                }
+            # Add username as alias if different from name and not already present
+            if discord_username and discord_username != target.get("name", ""):
+                aliases = target.setdefault("aliases", [])
+                if discord_username not in aliases:
+                    aliases.append(discord_username)
+            # Clean up legacy top-level user_id if it was migrated
+            if legacy_id:
+                target.pop("user_id", None)
+            target["updated_at"] = _dt.now(_tz.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            try:
+                _CONTACTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+                _CONTACTS_PATH.write_text(json.dumps(data, indent=2))
+            except OSError as e:
+                logger.debug("contacts.json write failed: %s", e)
+            return
+
+        # New contact (no match found)
         now = _dt.now(_tz.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        data.setdefault("contacts", []).append({
+        contacts.append({
             "id": str(_uuid.uuid4()),
-            "name": source.user_name or discord_user_id,
+            "name": discord_username or discord_user_id,
             "aliases": [],
             "platforms": {
                 "discord": {
                     "user_id": discord_user_id,
-                    "username": source.user_name or "",
+                    "username": discord_username,
                 }
             },
             "added_at": now,
