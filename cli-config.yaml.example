@@ -716,6 +716,8 @@ agent:
 #   qqbot:            hermes-qqbot            (same as telegram)
 #   teams:            hermes-teams            (same as telegram)
 #   google_chat:      hermes-google_chat      (same as telegram)
+#   autonomy:         see "autonomy" entry below — uses explicit toolset list
+#                     since there's no hermes-autonomy composite
 #
 platform_toolsets:
   cli: [hermes-cli]
@@ -727,6 +729,19 @@ platform_toolsets:
   homeassistant: [hermes-homeassistant]
   qqbot: [hermes-qqbot]
   yuanbao: [hermes-yuanbao]
+  autonomy:
+  - contacts
+  - discord
+  - intents
+  - journal
+  - outreach
+  - memory
+  - session_search
+  - skills
+  - terminal
+  - web
+  - file
+  - todo
   teams: [hermes-teams]
   google_chat: [hermes-google_chat]
 
