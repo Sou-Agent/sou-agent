@@ -286,6 +286,36 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "contacts": {
+        "description": "Platform-agnostic contact book (list, find, add, update, remove)",
+        "tools": ["contacts"],
+        "includes": [],
+    },
+
+    "channels": {
+        "description": "Persistent registry of channels Sou cares about (Discord, etc.)",
+        "tools": ["channels"],
+        "includes": [],
+    },
+
+    "journal": {
+        "description": "Append and read entries in Sou's personal journal",
+        "tools": ["journal"],
+        "includes": [],
+    },
+
+    "intents": {
+        "description": "Create, list, and resolve deferred intentions",
+        "tools": ["intents"],
+        "includes": [],
+    },
+
+    "outreach": {
+        "description": "Inject messages into an existing gateway session",
+        "tools": ["send_into_session"],
+        "includes": [],
+    },
+
     "yuanbao": {
         "description": "Yuanbao platform tools - group info, member queries, DM, stickers",
         "tools": [
