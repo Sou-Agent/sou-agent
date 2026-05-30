@@ -128,65 +128,120 @@ def _record_session(estimated_tokens: int, session_id: str) -> None:
 # Prompt construction
 # ---------------------------------------------------------------------------
 
-def build_injected_prompt(decision: Dict[str, Any], prepared: Optional[Dict[str, Any]] = None) -> str:
-    """Turn a WakeDecision into the message that opens the session.
+def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
+                           prepared: Optional[Dict[str, Any]] = None) -> str:
+    """Turn a wake decision + snapshot context into the session's opening message.
 
-    Tells Sou why she's awake and what each signal's expected action is, so she
-    behaves exactly as she would responding to a user — just self-directed.
-    ``prepared`` is the {ref: prepared_session} map from outreach pre-creation.
+    Tells Sou why she woke, what each signal is about (with full context from
+    the collector), and what tool to use to respond. ``prepared`` is the
+    {ref: prepared_session} map from outreach pre-creation.
+
+    The key rule: for signals marked ``respond``, she MUST actually call a send
+    tool — text output alone reaches no one.
     """
+    signal_contexts = _build_signal_context(snapshot, decision)
     lines = [
         "[autonomy wake]",
-        "You've chosen to wake yourself for the following reason — this is your own "
-        "initiative, not a user message. Act naturally, the same as in any session.",
+        "",
+        "You've chosen to wake yourself. Act naturally — this is your own initiative.",
         "",
         f"Reason: {decision.get('reason') or '(unspecified)'}",
         f"Session type: {decision.get('session_type', 'inward')} "
-        "(outward = you intend to say something externally; inward = think/journal only)",
+        "(outward = you intend to send messages externally; inward = think/journal only)",
         "",
-        "DELIVERY: This is NOT a normal chat and NOT a cron job. Your final response is "
-        "discarded — it is not sent or shown to anyone. The ONLY way to produce an external "
-        "effect is to call a tool: send_into_session to reach someone, journal/intents to "
-        "record something. Do NOT use send_message here — outreach goes through "
-        "send_into_session so it lands in the prepared conversation. If you decide to respond, "
-        "you must actually call send_into_session — writing the reply as your final message "
-        "reaches no one.",
+        "--- DELIVERY RULES ---",
+        "Your final free-form response is DISCARDED — no one sees it.",
+        "The ONLY way to reach anyone is to call a tool directly:",
         "",
-        "Signals and the action you decided for each:",
+        "  discord_send(session_id='...', message='...')  — send to a Discord channel/DM",
+        "  discord_dm(user='...', message='...')             — send a Discord DM",
+        "  send_into_session(ref='...', message='...')       — send into a prepared session",
+        "  journal(section='...', content='...')              — write to your journal",
+        "  intents(action='create', ...)                      — record an intent for later",
+        "",
+        "If you decided a signal should get a 'respond' action, you MUST actually",
+        "call one of the send tools above. Writing the response as your final",
+        "message discards it.",
+        "",
+        "--- PREPARED SESSIONS ---",
     ]
-    for s in decision.get("signals", []):
-        action = s.get("action", "ignore")
-        sid = s.get("signal_id", "")
-        summary = s.get("content_summary") or s.get("source") or ""
-        lines.append(f"  - [{action}] {sid}: {summary}")
 
     if prepared:
-        lines += ["", "Prepared sessions (a conversation is already open — speak into it):"]
-        for ref, t in prepared.items():
-            lines.append(f"  - ref '{ref}' → {t.get('platform')} ({t.get('label')})")
+        lines.append("Gateway sessions are already prepared for each respond target. Use")
+        lines.append("these refs with send_into_session:")
+        for ref, sess in prepared.items():
+            label = sess.get("label", ref)
+            chat_type = sess.get("chat_type", "?")
+            platform = sess.get("platform", "?")
+            session_id = sess.get("session_id", "?")
+            lines.append(f"  ref '{ref}' → {chat_type} on {platform} (session_id={session_id})")
+    else:
+        lines.append("  (none — no outward targets were prepared)")
 
     lines += [
         "",
-        "Guidance:",
-        "  • respond — say something now. To reach someone/somewhere, use "
-        "send_into_session(ref=..., message=...) with one of the prepared refs above; the "
-        "recipient can reply straight back into that conversation. To continue an existing "
-        "conversation on any platform, find it with session_search and use "
-        "send_into_session(session_id=...). For Discord-specific actions (reactions, fetching "
-        "messages, threads), the discord tools also accept a session_id/ref in place of a "
-        "channel_id.",
-        "  • hold — you're aware and intend to respond, but not yet. Record an intent so you "
-        "come back to it: use the intents tool with origin='hold' and "
-        "source_signal_id set to the signal's id above.",
-        "  • self_reflect — process internally; write to your journal rather than messaging.",
-        "  • ignore — no action needed.",
+        "--- SIGNAL CONTEXT ---",
+        "The aux model decided each signal's action. Context from the collector:",
         "",
-        "Privacy: only the messages you actually send are seen by anyone. This reasoning and "
-        "anything you journal stays private.",
+    ]
+
+    for s in decision.get("signals", []):
+        action = s.get("action", "ignore")
+        sid = s.get("signal_id", "")
+        ctx = signal_contexts.get(sid, {})
+        lines.append(f"[{action.upper()}] {sid}")
+        if ctx:
+            if ctx.get("author"):
+                lines.append(f"  From: {ctx['author']}")
+            if ctx.get("channel_name"):
+                lines.append(f"  Channel: #{ctx['channel_name']}")
+            if ctx.get("content"):
+                lines.append(f"  Content: {ctx['content']}")
+        lines.append(f"  Reason: {s.get('content_summary', '')}")
+        lines.append("")
+
+    lines += [
+        "--- GUIDANCE ---",
+        "  respond      — STAYING SILENT IS NOT AN OPTION. You MUST call a send tool.",
+        "                 Use send_into_session(ref=...) with one of the refs above, or",
+        "                 discord_send/discord_dm with the session_id from the prepared session.",
+        "  hold         — Record an intent with origin='hold' and source_signal_id set.",
+        "                 You'll come back to this on the next cycle.",
+        "  self_reflect — Journal about it. Write to journal/thoughts/ or deal with it internally.",
+        "  ignore       — No action needed.",
         "",
-        "If nothing in fact needs doing now, it's fine to simply note that and end.",
+        "If nothing needs doing, just note that and end.",
+        "Privacy: only explicit send tool calls reach anyone. Everything else stays private.",
     ]
     return "\n".join(lines)
+
+
+def _build_signal_context(snapshot: Dict[str, Any], decision: Dict[str, Any]) -> Dict[str, dict]:
+    """Cross-reference decision signal_ids against the original snapshot to
+    recover full context (author, channel, content)."""
+    signal_ids = {s.get("signal_id", "") for s in decision.get("signals", [])}
+    ctx: Dict[str, dict] = {}
+
+    # Match against raw discord_signals from the collector.
+    for sig in (snapshot.get("discord_signals") or []):
+        sid = sig.get("signal_id", "")
+        if sid in signal_ids:
+            ctx[sid] = {
+                "author": sig.get("author", ""),
+                "channel_name": sig.get("channel_name", ""),
+                "content": sig.get("content_summary", ""),
+            }
+
+    # Match against contact signals.
+    for sig in (snapshot.get("contact_signals") or []):
+        sid = sig.get("signal_id", "")
+        if sid in signal_ids:
+            ctx[sid] = {
+                "author": sig.get("name", ""),
+                "content": sig.get("content_summary", ""),
+            }
+
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +419,8 @@ def _link_holds(decision: Dict[str, Any]) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def spawn_autonomy_session(decision: Dict[str, Any], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def spawn_autonomy_session(decision: Dict[str, Any], config: Optional[Dict[str, Any]] = None,
+                            snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run a full agent session for a wake decision. Returns a result dict.
 
     ``{"fired": bool, "reason": str, "final_response": str, "session_id": str}``
@@ -393,7 +449,7 @@ def spawn_autonomy_session(decision: Dict[str, Any], config: Optional[Dict[str, 
         except Exception:
             logger.exception("autonomy: outreach pre-creation failed")
 
-    prompt = build_injected_prompt(decision, prepared=prepared)
+    prompt = build_injected_prompt(snapshot or {}, decision, prepared=prepared)
 
     # Mark this as a cron-like internal session so the approval system applies
     # non-interactive auto-approval, and isolate session identity from any live

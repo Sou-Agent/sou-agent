@@ -79,7 +79,7 @@ def run_autonomy_cycle(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any
 
         fired = False
         if decision.get("wake"):
-            result = session_spawn.spawn_autonomy_session(decision, config)
+            result = session_spawn.spawn_autonomy_session(decision, config, snapshot=snapshot)
             fired = result.get("fired", False)
             status["fired"] = fired
             status["session_id"] = result.get("session_id", "")
