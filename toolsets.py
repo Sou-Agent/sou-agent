@@ -316,6 +316,12 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "autonomy": {
+        "description": "Manually inspect and trigger the autonomy cycle",
+        "tools": ["manually_trigger_autonomy"],
+        "includes": [],
+    },
+
     "yuanbao": {
         "description": "Yuanbao platform tools - group info, member queries, DM, stickers",
         "tools": [
