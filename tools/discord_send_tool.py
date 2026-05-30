@@ -218,6 +218,7 @@ async def _discord_send_handler(args: Dict[str, Any], **_kw) -> str:
     if adapter is None:
         return json.dumps({"error": "Discord adapter is not running. Is the gateway connected to Discord?"})
 
+    await adapter.send_typing(resolved_id)
     try:
         if file_path:
             result = await adapter.send_document(resolved_id, file_path, caption=message)
@@ -226,6 +227,8 @@ async def _discord_send_handler(args: Dict[str, Any], **_kw) -> str:
             result = await adapter.send(chat_id=resolved_id, content=message, reply_to=reply_to, metadata=metadata)
     except Exception as e:
         return json.dumps({"error": f"Send failed: {e}"})
+    finally:
+        await adapter.stop_typing(resolved_id)
 
     if not result.success:
         return json.dumps({"error": result.error or "Send failed"})
@@ -275,6 +278,7 @@ async def _discord_dm_handler(args: Dict[str, Any], **_kw) -> str:
     if not dm_channel_id:
         return json.dumps({"error": f"Could not open DM channel with user {user_id}"})
 
+    await adapter.send_typing(dm_channel_id)
     try:
         if file_path:
             result = await adapter.send_document(dm_channel_id, file_path, caption=message)
@@ -282,6 +286,8 @@ async def _discord_dm_handler(args: Dict[str, Any], **_kw) -> str:
             result = await adapter.send(chat_id=dm_channel_id, content=message)
     except Exception as e:
         return json.dumps({"error": f"DM send failed: {e}"})
+    finally:
+        await adapter.stop_typing(dm_channel_id)
 
     if not result.success:
         return json.dumps({"error": result.error or "DM send failed"})
