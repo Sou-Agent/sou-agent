@@ -466,6 +466,25 @@ def _remove_role(token: str, guild_id: str, user_id: str, role_id: str, **_kwarg
     return json.dumps({"success": True, "message": f"Role {role_id} removed from user {user_id}."})
 
 
+def _list_emojis(token: str, guild_id: str, **_kwargs: Any) -> str:
+    """List all custom emojis for a guild."""
+    emojis = _discord_request("GET", f"/guilds/{guild_id}/emojis", token)
+    result = []
+    for e in emojis:
+        animated = e.get("animated", False)
+        name = e.get("name", "")
+        eid = e.get("id", "")
+        prefix = "a" if animated else ""
+        result.append({
+            "id": eid,
+            "name": name,
+            "animated": animated,
+            "available": e.get("available", True),
+            "usage": f"<{prefix}:{name}:{eid}>",
+        })
+    return json.dumps({"emojis": result, "count": len(result)})
+
+
 # ---------------------------------------------------------------------------
 # Action dispatch + metadata
 # ---------------------------------------------------------------------------
@@ -486,9 +505,10 @@ _ACTIONS = {
     "create_thread": _create_thread,
     "add_role": _add_role,
     "remove_role": _remove_role,
+    "list_emojis": _list_emojis,
 }
 
-_CORE_ACTION_NAMES = frozenset({"fetch_messages", "search_members", "create_thread"})
+_CORE_ACTION_NAMES = frozenset({"fetch_messages", "search_members", "create_thread", "list_emojis"})
 _ADMIN_ACTION_NAMES = frozenset(_ACTIONS.keys()) - _CORE_ACTION_NAMES
 
 _CORE_ACTIONS = {k: v for k, v in _ACTIONS.items() if k in _CORE_ACTION_NAMES}
@@ -513,6 +533,7 @@ _ACTION_MANIFEST: List[Tuple[str, str, str]] = [
     ("create_thread", "(channel_id, name)", "create a public thread; optional message_id anchor"),
     ("add_role", "(guild_id, user_id, role_id)", "assign a role"),
     ("remove_role", "(guild_id, user_id, role_id)", "remove a role"),
+    ("list_emojis", "(guild_id)", "all custom emojis for a guild with inline usage strings"),
 ]
 
 # Actions that require the GUILD_MEMBERS privileged intent.
@@ -534,6 +555,7 @@ _REQUIRED_PARAMS: Dict[str, List[str]] = {
     "create_thread": ["channel_id", "name"],
     "add_role": ["guild_id", "user_id", "role_id"],
     "remove_role": ["guild_id", "user_id", "role_id"],
+    "list_emojis": ["guild_id"],
 }
 
 
@@ -672,6 +694,14 @@ def _build_schema(
         "channel_id": {
             "type": "string",
             "description": "Discord channel ID.",
+        },
+        "session_id": {
+            "type": "string",
+            "description": (
+                "Alternative to channel_id: an autonomy session ref or session_id "
+                "(from your wake prompt or session_search). Resolves to that session's "
+                "Discord channel. An explicit channel_id takes precedence."
+            ),
         },
         "user_id": {
             "type": "string",
@@ -824,6 +854,22 @@ def check_discord_tool_requirements() -> bool:
 # Handlers
 # ---------------------------------------------------------------------------
 
+def _resolve_channel_from_session(session_id: str) -> Optional[str]:
+    """Resolve an autonomy session ref/id to a Discord channel id, or None.
+
+    Lets the Discord tools be driven by a ``session_id`` during the autonomy
+    loop (a session prepared by the outreach system, or any session_id from
+    session_search). Lazily imported so the Discord tools don't hard-depend on
+    the autonomy package.
+    """
+    try:
+        from autonomy.outreach import discord_channel_for_session
+        resolved = discord_channel_for_session(session_id)
+        return resolved["channel_id"] if resolved else None
+    except Exception:
+        return None
+
+
 def _run_discord_action(
     action: str,
     valid_actions: Dict[str, Any],
@@ -839,11 +885,23 @@ def _run_discord_action(
     before: str = "",
     after: str = "",
     auto_archive_duration: int = 1440,
+    session_id: str = "",
 ) -> str:
     """Shared handler logic for both discord tools."""
     token = _get_bot_token()
     if not token:
         return json.dumps({"error": "DISCORD_BOT_TOKEN not configured."})
+
+    # Allow a session_id in place of a raw channel_id (autonomy loop). When both
+    # are given, an explicit channel_id wins.
+    if session_id and not channel_id:
+        resolved_channel = _resolve_channel_from_session(session_id)
+        if resolved_channel:
+            channel_id = resolved_channel
+        else:
+            return json.dumps({
+                "error": f"session_id '{session_id}' did not resolve to a Discord channel.",
+            })
 
     action_fn = valid_actions.get(action)
     if not action_fn:
@@ -923,6 +981,7 @@ _HANDLER_DEFAULTS = {
     "action": "", "guild_id": "", "channel_id": "", "user_id": "",
     "role_id": "", "message_id": "", "query": "", "name": "",
     "limit": 50, "before": "", "after": "", "auto_archive_duration": 1440,
+    "session_id": "",
 }
 
 

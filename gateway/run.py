@@ -86,6 +86,28 @@ _TELEGRAM_NOISY_STATUS_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+_DISCORD_NOISY_STATUS_RE = re.compile(
+    r"("  # fallback/retry chatter — fine in logs, spammy in Discord DMs
+    r"primary\s+model\s+failed"
+    r"|rate\s+limited\s+[—\-]"
+    r"|switching\s+to\s+fallback"
+    r"|auxiliary\s+.+\s+failed"
+    r"|compression\s+summary\s+failed"
+    r"|fallback\s+context\s+marker"
+    r"|configured\s+compression\s+model\s+.+\s+failed"
+    r"|no\s+auxiliary\s+llm\s+provider\s+configured"
+    r"|auto-lowered\s+compression\s+threshold"
+    r"|compacting\s+context\s+[—-]\s+summarizing\s+earlier\s+conversation"
+    r"|preflight\s+compression"
+    r"|rate\s+limited\.\s+waiting\s+\d"
+    r"|retrying\s+in\s+\d"
+    r"|max\s+retries\s+\(\d+\).*(?:trying\s+fallback|exhausted|invalid\s+responses)"
+    r"|stream\s+(?:drop|drop\s+mid\s+tool-call).+retry\s+\d"
+    r"|stale\s+connections\s+from\s+a\s+previous\s+provider\s+issue"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
+
 _GATEWAY_PROVIDER_ERROR_RE = re.compile(
     r"("  # infrastructure/provider error preambles, not ordinary assistant prose
     r"api\s+(?:call\s+)?failed"
@@ -308,7 +330,15 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     text = str(message or "").strip()
     if not text:
         return None
-    if _gateway_platform_value(platform) != "telegram":
+
+    platform_val = _gateway_platform_value(platform)
+
+    if platform_val == "discord":
+        if _discord_cfg.get("suppress_noisy_status", True) and _DISCORD_NOISY_STATUS_RE.search(text):
+            return None
+        return text
+
+    if platform_val != "telegram":
         return text
 
     text = _redact_gateway_user_facing_secrets(text)
@@ -987,6 +1017,10 @@ try:
         apply_ipv4_preference(force=True)
 except Exception as _bootstrap_exc:
     print(f"  Warning: IPv4 preference application failed: {_bootstrap_exc}", file=sys.stderr)
+
+_discord_cfg: dict = (_cfg if "_cfg" in dir() else {}).get("discord", {})
+if not isinstance(_discord_cfg, dict):
+    _discord_cfg = {}
 
 # Validate config structure early — log warnings so gateway operators see problems
 try:
@@ -7013,7 +7047,22 @@ class GatewayRunner:
                     # Record rate limit so subsequent messages are silently ignored
                     self.pairing_store._record_rate_limit(platform_name, source.user_id)
             return None
-        
+
+        # Autonomy: stamp last_seen for watched contacts so contact-silence
+        # signals and `contact:{name} last_seen > …` intent conditions have a
+        # live clock. No-op unless the sender maps to a watched person; never
+        # raises. Internal/system events are skipped (no real sender).
+        if not is_internal and source.user_id is not None:
+            try:
+                from autonomy.contact_tracker import update_last_seen
+                update_last_seen(
+                    platform=source.platform.value if source.platform else "",
+                    user_id=str(source.user_id or ""),
+                    display_name=source.user_name or "",
+                )
+            except Exception:
+                pass
+
         # Intercept messages that are responses to a pending /update prompt.
         # The update process (detached) wrote .update_prompt.json; the watcher
         # forwarded it to the user; now the user's reply goes back via
@@ -8097,7 +8146,7 @@ class GatewayRunner:
             group_sessions_per_user=_group_sessions_per_user,
             thread_sessions_per_user=_thread_sessions_per_user,
         )
-        if _is_shared_multi_user and source.user_name:
+        if (_discord_cfg.get("always_prepend_username", False) or _is_shared_multi_user) and source.user_name:
             message_text = f"[{source.user_name}] {message_text}"
 
         # Prepend channel context from history backfill (if any).  This
@@ -16334,6 +16383,11 @@ class GatewayRunner:
             if event_type not in {"tool.started",}:
                 return
 
+            # Suppress hidden tools from Discord session context output.
+            _hidden_tools = _discord_cfg.get("hidden_tools") or []
+            if _hidden_tools and tool_name and tool_name in _hidden_tools and source.platform == Platform.DISCORD:
+                return
+
             # Suppress tool-progress bubbles once the user has sent `stop`.
             # When the LLM response carries N parallel tool calls, the agent
             # fires N "tool.started" events back-to-back before checking for
@@ -18596,6 +18650,7 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
     CHANNEL_DIR_EVERY = 5    # ticks — every 5 minutes
     PASTE_SWEEP_EVERY = 60   # ticks — once per hour
     CURATOR_EVERY = 60       # ticks — poll hourly (inner gate handles the real cadence)
+    AUTONOMY_EVERY = 1       # ticks — poll every tick (inner gate enforces aux_interval_minutes)
 
     logger.info("Cron ticker started (interval=%ds)", interval)
     tick_count = 0
@@ -18664,6 +18719,16 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
                 )
             except Exception as e:
                 logger.debug("Curator tick error: %s", e)
+
+        # Autonomy — let the agent act on its own initiative. maybe_run_autonomy_cycle()
+        # self-gates on config.autonomy.enabled and aux_interval_minutes, so polling
+        # every tick is cheap (a disabled/not-yet-due cycle returns immediately).
+        if tick_count % AUTONOMY_EVERY == 0:
+            try:
+                from autonomy.runner import maybe_run_autonomy_cycle
+                maybe_run_autonomy_cycle()
+            except Exception as e:
+                logger.debug("Autonomy tick error: %s", e)
 
         stop_event.wait(timeout=interval)
     logger.info("Cron ticker stopped")

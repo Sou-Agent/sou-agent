@@ -457,6 +457,15 @@ prompt_caching:
 #                           # reasoning controls:
 #                           # extra_body:
 #                           #   enable_thinking: false
+#
+#   # Autonomy wake decision — the cheap "should I wake Sou up?" triage call.
+#   # Point this at the cheapest/fastest model you have (Gemini Flash, Haiku,
+#   # a local model). It reads a short state summary (~500 tokens) and returns
+#   # a JSON wake decision. Runs every autonomy.aux_interval_minutes.
+#   autonomy:
+#     provider: "auto"
+#     model: ""
+#     timeout: 30
 
 # =============================================================================
 # Persistent Memory
@@ -486,6 +495,53 @@ memory:
   # lost (compression, /new, /reset, exit). Set to 0 to disable.
   # For exit/reset, only fires if the session had at least this many user turns.
   flush_min_turns: 6        # Min user turns to trigger flush on exit/reset (0 = disabled)
+
+# =============================================================================
+# Journal
+# =============================================================================
+# The agent's persistent journal — feelings, thoughts, reflections, plus the
+# people/ and channels/ watch-lists and intents/ the autonomy system reads.
+# Managed by the journal_* and intent_* tools (the agent never edits these by
+# hand). Path is overridable; everything that reads the journal resolves it
+# from here rather than assuming ~/.hermes/journal.
+#
+journal:
+  path: ~/.hermes/journal
+
+# =============================================================================
+# Autonomy (Experimental)
+# =============================================================================
+# A lightweight layer that lets the agent act on its own initiative rather than
+# only in response to incoming messages or cron timers. Every few minutes a
+# zero-token collector gathers state (pending intents, unread messages in
+# watched channels, contact silence, journal activity) and — only if something
+# is worth attention — a cheap aux model (auxiliary.autonomy above) decides
+# whether to wake a full agent session. Runs alongside cron, not instead of it.
+#
+# Disabled by default. Watched channels and people live in the journal under
+# people/ and channels/ (managed by the agent), NOT here.
+#
+autonomy:
+  enabled: false
+  # How often the collector + aux triage runs (minutes).
+  aux_interval_minutes: 7
+  # Rate-limit on full sessions: estimated token gap required between
+  # autonomy-triggered sessions, to avoid token blowout when signals are dense.
+  min_tokens_between_full_sessions: 10000
+  # Default silence before a watched contact becomes a signal (hours).
+  # Overridable per-person in journal/people/{name}.yaml::silence_threshold_hours.
+  contact_silence_threshold_hours: 48
+  # Age before an open curiosity thread becomes a signal (hours).
+  curiosity_age_threshold_hours: 72
+  # Default hold window: when the aux model holds a signal, how long before it
+  # is re-surfaced for reconsideration (hours).
+  hold_reevaluate_hours: 6
+
+# Timezone used everywhere timestamps are displayed or evaluated (IANA name,
+# e.g. "Australia/Perth"). All timestamps are stored internally as UTC and
+# converted to this zone for display and intent-condition evaluation. Also
+# settable via the HERMES_TIMEZONE env var (which takes precedence).
+# timezone: "Australia/Perth"
 
 # =============================================================================
 # Session Reset Policy (Messaging Platforms)

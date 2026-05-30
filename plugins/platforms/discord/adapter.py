@@ -556,6 +556,49 @@ def _read_dm_role_auth_guild() -> Optional[int]:
     return guild_id if guild_id > 0 else None
 
 
+_CONTACTS_PATH = _Path.home() / ".hermes" / "contacts.json"
+_CONTACTS_LOCK = threading.Lock()
+
+
+def _maybe_register_contact(source: Any) -> None:
+    """Silently add a new Discord user to contacts.json on first contact.
+
+    Skips bots, skips users already present. Never overwrites existing entries.
+    """
+    if getattr(source, "is_bot", False) or not getattr(source, "user_id", None):
+        return
+    discord_user_id = str(source.user_id)
+    with _CONTACTS_LOCK:
+        try:
+            data = json.loads(_CONTACTS_PATH.read_text()) if _CONTACTS_PATH.exists() else {"version": 1, "contacts": []}
+        except (json.JSONDecodeError, OSError):
+            data = {"version": 1, "contacts": []}
+        for contact in data.get("contacts", []):
+            if contact.get("platforms", {}).get("discord", {}).get("user_id") == discord_user_id:
+                return
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        now = _dt.now(_tz.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        data.setdefault("contacts", []).append({
+            "id": str(_uuid.uuid4()),
+            "name": source.user_name or discord_user_id,
+            "aliases": [],
+            "platforms": {
+                "discord": {
+                    "user_id": discord_user_id,
+                    "username": source.user_name or "",
+                }
+            },
+            "added_at": now,
+            "updated_at": now,
+        })
+        try:
+            _CONTACTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _CONTACTS_PATH.write_text(json.dumps(data, indent=2))
+        except OSError as e:
+            logger.debug("contacts.json write failed: %s", e)
+
+
 class DiscordAdapter(BasePlatformAdapter):
     """
     Discord bot adapter.
@@ -1377,6 +1420,33 @@ class DiscordAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.debug("[%s] remove_reaction failed (%s): %s", self.name, emoji, e)
             return False
+
+    async def add_reaction_by_id(self, channel_id: str, message_id: str, emoji: str) -> bool:
+        """Add a reaction to a message identified by channel/message IDs (no message object needed)."""
+        if not self._client:
+            return False
+        try:
+            channel = self._client.get_channel(int(channel_id))
+            if not channel:
+                channel = await self._client.fetch_channel(int(channel_id))
+            partial = discord.PartialMessage(channel=channel, id=int(message_id))
+            await partial.add_reaction(emoji)
+            return True
+        except Exception as e:
+            logger.debug("[%s] add_reaction_by_id failed (%s/%s %s): %s", self.name, channel_id, message_id, emoji, e)
+            return False
+
+    async def open_dm_channel(self, user_id: str) -> Optional[str]:
+        """Fetch a user and open (or retrieve) their DM channel. Returns the channel ID or None."""
+        if not self._client:
+            return None
+        try:
+            user = await self._client.fetch_user(int(user_id))
+            dm = await user.create_dm()
+            return str(dm.id)
+        except Exception as e:
+            logger.debug("[%s] open_dm_channel failed for user %s: %s", self.name, user_id, e)
+            return None
 
     def _reactions_enabled(self) -> bool:
         """Check if message reactions are enabled via config/env."""
@@ -4669,6 +4739,7 @@ class DiscordAdapter(BasePlatformAdapter):
             parent_chat_id=parent_channel_id,
             message_id=str(message.id),
         )
+        _maybe_register_contact(source)
 
         # Build media URLs -- download image attachments to local cache so the
         # vision tool can access them reliably (Discord CDN URLs can expire).

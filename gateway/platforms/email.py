@@ -13,6 +13,8 @@ Environment variables:
     EMAIL_PASSWORD      — Email password or app-specific password
     EMAIL_POLL_INTERVAL — Seconds between mailbox checks (default: 15)
     EMAIL_ALLOWED_USERS — Comma-separated list of allowed sender addresses
+    EMAIL_IMAP_USE_SSL  — Use implicit SSL for IMAP (default: true; set false for Proton Mail Bridge)
+    EMAIL_SMTP_USE_TLS  — Use STARTTLS for SMTP (default: true; set false for Proton Mail Bridge)
 """
 
 import asyncio
@@ -255,6 +257,8 @@ class EmailAdapter(BasePlatformAdapter):
         self._smtp_host = os.getenv("EMAIL_SMTP_HOST", "")
         self._smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
         self._poll_interval = int(os.getenv("EMAIL_POLL_INTERVAL", "15"))
+        self._imap_use_ssl = os.getenv("EMAIL_IMAP_USE_SSL", "true").lower() not in ("false", "0", "no")
+        self._smtp_use_tls = os.getenv("EMAIL_SMTP_USE_TLS", "true").lower() not in ("false", "0", "no")
 
         # Skip attachments — configured via config.yaml:
         #   platforms:
@@ -297,7 +301,10 @@ class EmailAdapter(BasePlatformAdapter):
         """Connect to the IMAP server and start polling for new messages."""
         try:
             # Test IMAP connection
-            imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+            if self._imap_use_ssl:
+                imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+            else:
+                imap = imaplib.IMAP4(self._imap_host, self._imap_port, timeout=30)
             imap.login(self._address, self._password)
             _send_imap_id(imap)
             # Mark all existing messages as seen so we only process new ones
@@ -317,7 +324,8 @@ class EmailAdapter(BasePlatformAdapter):
         try:
             # Test SMTP connection
             smtp = smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=30)
-            smtp.starttls(context=ssl.create_default_context())
+            if self._smtp_use_tls:
+                smtp.starttls(context=ssl.create_default_context())
             smtp.login(self._address, self._password)
             smtp.quit()
             logger.info("[Email] SMTP connection test passed.")
@@ -365,7 +373,10 @@ class EmailAdapter(BasePlatformAdapter):
         """Fetch new (unseen) messages from IMAP. Runs in executor thread."""
         results = []
         try:
-            imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+            if self._imap_use_ssl:
+                imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+            else:
+                imap = imaplib.IMAP4(self._imap_host, self._imap_port, timeout=30)
             try:
                 imap.login(self._address, self._password)
                 _send_imap_id(imap)
@@ -550,7 +561,8 @@ class EmailAdapter(BasePlatformAdapter):
 
         smtp = smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=30)
         try:
-            smtp.starttls(context=ssl.create_default_context())
+            if self._smtp_use_tls:
+                smtp.starttls(context=ssl.create_default_context())
             smtp.login(self._address, self._password)
             smtp.send_message(msg)
         finally:
@@ -672,7 +684,8 @@ class EmailAdapter(BasePlatformAdapter):
 
         smtp = smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=30)
         try:
-            smtp.starttls(context=ssl.create_default_context())
+            if self._smtp_use_tls:
+                smtp.starttls(context=ssl.create_default_context())
             smtp.login(self._address, self._password)
             smtp.send_message(msg)
         finally:
@@ -751,7 +764,8 @@ class EmailAdapter(BasePlatformAdapter):
 
         smtp = smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=30)
         try:
-            smtp.starttls(context=ssl.create_default_context())
+            if self._smtp_use_tls:
+                smtp.starttls(context=ssl.create_default_context())
             smtp.login(self._address, self._password)
             smtp.send_message(msg)
         finally:
