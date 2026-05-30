@@ -130,22 +130,66 @@ def _contact_add(args: Dict, **_) -> str:
         data = _load_data()
         contacts = data.setdefault("contacts", [])
 
-        # Merge into an existing contact if name fuzzy-matches
-        existing = fuzzy_match_contacts(contacts, name)
-        if existing and existing[0].get("name", "").lower() == name.lower():
-            target = existing[0]
+        # --- Dedupe: search by multiple strategies before creating ---
+
+        # 1. Check by platform user_id (e.g. discord user_id already under another contact)
+        target = None
+        platform_user_id = platform_data.get("user_id", "") if platform_data else ""
+        if platform and platform_user_id:
+            for c in contacts:
+                existing_platform = c.get("platforms", {}).get(platform, {})
+                if str(existing_platform.get("user_id", "")) == str(platform_user_id):
+                    target = c
+                    break
+
+        # 2. Check by exact name match
+        if target is None:
+            existing = fuzzy_match_contacts(contacts, name)
+            if existing and existing[0].get("name", "").lower() == name.lower():
+                target = existing[0]
+
+        # 3. Check if any provided alias matches an existing contact's name or aliases
+        if target is None and aliases:
+            for alias in aliases:
+                alias_lower = alias.strip().lower()
+                if not alias_lower:
+                    continue
+                for c in contacts:
+                    cname = c.get("name", "").lower()
+                    if cname == alias_lower:
+                        target = c
+                        break
+                    for a in c.get("aliases", []):
+                        if a.lower() == alias_lower:
+                            target = c
+                            break
+                    if target:
+                        break
+                if target:
+                    break
+
+        # Merge into found contact
+        if target:
+            # Auto-add the new name as an alias if different from current name
+            if name.lower() != target.get("name", "").lower() and name not in target.get("aliases", []):
+                target.setdefault("aliases", []).append(name)
             if aliases:
                 current = target.setdefault("aliases", [])
                 for a in aliases:
                     if a not in current:
                         current.append(a)
             if platform and platform_data:
-                target.setdefault("platforms", {})[platform] = platform_data
+                # Merge platform data — update existing fields rather than replace
+                existing_plat = target.setdefault("platforms", {}).get(platform, {})
+                if existing_plat:
+                    existing_plat.update(platform_data)
+                else:
+                    target.setdefault("platforms", {})[platform] = platform_data
             target["updated_at"] = _now_iso()
             _save_data(data)
             return json.dumps({"merged_into": target["id"], "contact": target})
 
-        # New contact
+        # New contact (no match found)
         now = _now_iso()
         contact: Dict[str, Any] = {
             "id": str(uuid.uuid4()),
@@ -281,7 +325,7 @@ _SCHEMA = {
             },
             "platform": {
                 "type": "string",
-                "description": "[contact_find, contact_list] Filter to contacts with this platform (e.g. 'discord', 'email'). Also used with contact_update/contact_remove to target a specific platform entry.",
+                "description": "[contact_find, contact_list, contact_add] Filter to contacts with this platform (e.g. 'discord', 'email'). Also used with contact_update/contact_remove to target a specific platform entry.",
             },
             "id": {
                 "type": "string",
