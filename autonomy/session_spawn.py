@@ -212,6 +212,10 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
                 "       with one of the refs above, or discord_send/discord_dm with",
                 "       the session_id from the prepared session.",
                 "",
+                "       BUT: Check if there's already a recent Sou message in this",
+                "       channel first. If you see yourself already talking (past ~5 min),",
+                "       SKIP — your active session is already handling it. Don't double-respond.",
+                "",
             ]
         elif action == "hold":
             lines += [
