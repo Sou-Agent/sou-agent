@@ -36,14 +36,32 @@ _SYSTEM = (
     "warrants waking the agent for a full session. Most cycles should NOT wake the agent — "
     "only wake when there is something the agent would actually want to act on or think "
     "about. Be conservative with the agent's attention.\n\n"
-    "Reply with ONLY a JSON object, no prose, matching:\n"
-    '{"wake": bool, "session_type": "outward"|"inward", "reason": str, '
-    '"signals": [{"signal_id": str, "type": str, "action": "respond"|"hold"|"self_reflect"|"ignore"}]}\n\n'
-    "session_type: 'outward' if the agent should say something externally, 'inward' if the "
-    "agent should only think/journal. Actions per signal: respond (say something), hold "
-    "(intends to respond but not yet — an intent will be created to come back to it), "
-    "self_reflect (process internally / journal), ignore (nothing needed). Intents and held "
-    "signals take priority over fresh environmental signals."
+
+    "Respond with **only** a valid JSON object. No introductory text, no explanation, "
+    "no markdown fences. The JSON must exactly match this structure:\n\n"
+
+    '{"wake": false, "session_type": "inward", "reason": "", "signals": []}\n\n'
+
+    "Field reference:\n"
+    '- wake (bool)       — true if the agent should be woken for a session\n'
+    '- session_type (str) — "outward" if the agent should say something externally,\n'
+    '                       "inward" if it should only think/journal\n'
+    '- reason (str)       — brief justification for the decision\n'
+    '- signals (array)    — per-signal action plan:\n'
+    '    {\n'
+    '      "signal_id": "discord:12345",\n'
+    '      "type": "discord",\n'
+    '      "action": "respond" | "hold" | "self_reflect" | "ignore"\n'
+    '    }\n\n'
+
+    "Action meanings:\n"
+    "- respond      — the agent should say something externally\n"
+    "- hold         — intends to respond but not yet; create an intent to come back\n"
+    "- self_reflect — process internally / journal\n"
+    "- ignore       — nothing needed\n\n"
+
+    "Intents and held signals take priority over fresh environmental signals.\n"
+    "Return JSON only. No prose."
 )
 
 
@@ -58,7 +76,7 @@ def _fmt_intents(snapshot: Dict[str, Any]) -> str:
         prio = it.get("priority", "normal")
         line = f"- [{it.get('signal_id') or 'intent:' + str(it.get('id'))}] ({prio}, origin={origin}) {desc}"
         if origin in ("hold", "self_reflect") and it.get("source_signal_id"):
-            line += f"  ↳ traces back to {it['source_signal_id']}"
+            line += f"  -> traces back to {it['source_signal_id']}"
         lines.append(line)
         # Normalize signal_id for the model so its decisions reference intents.
         if not it.get("signal_id") and it.get("id"):
@@ -72,7 +90,7 @@ def _fmt_held(snapshot: Dict[str, Any]) -> str:
         return ""
     lines = ["## Held signals [she already chose to come back to these]"]
     for h in held:
-        lines.append(f"- [{h.get('signal_id')}] \"{h.get('source_summary', '')}\" — held {h.get('held_since', '?')}")
+        lines.append(f"- [{h.get('signal_id')}] \"{h.get('source_summary', '')}\" - held {h.get('held_since', '?')}")
     return "\n".join(lines)
 
 
@@ -189,24 +207,65 @@ def _dump_autonomy_log(prompt: str, raw_response: str = "", error: str = "") -> 
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+    """Find and parse the first valid JSON object in text.
+
+    Strategy, in order:
+      1. Try json.loads directly on the whole text.
+      2. Strip code fences (```json ... ```) and retry.
+      3. Brace-counting: find every outermost {...} pair with
+         balanced braces and attempt json.loads on each.
+      4. Last-resort greedy regex for degenerate cases.
+
+    Returns None when nothing works.
+    """
     if not text:
         return None
     text = text.strip()
-    # Strip ``` fences if present.
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text).strip()
+
+    # 1 — try the whole thing
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # Fallback: grab the first {...} blob.
+
+    # 2 — strip ``` fences
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text).strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+    # 3 — brace-counting: find outermost {...} with balanced braces
+    candidates = []
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidates.append(text[start : i + 1])
+                start = -1
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    # 4 — desperate last resort: greedy regex
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(0))
         except json.JSONDecodeError:
-            return None
+            pass
+
     return None
 
 
@@ -281,7 +340,7 @@ def decide_wake(snapshot: Dict[str, Any], aux_config: Optional[Dict[str, Any]] =
 
     # Log when the model returned something but it wasn't valid JSON
     if not isinstance(_extract_json(raw_response), dict):
-        _dump_autonomy_log(prompt, raw_response=raw_response, error="unparseable — model output did not contain valid JSON")
+        _dump_autonomy_log(prompt, raw_response=raw_response, error="unparseable - model output did not contain valid JSON")
 
     logger.info(
         "autonomy aux decision: wake=%s type=%s signals=%d reason=%s",
