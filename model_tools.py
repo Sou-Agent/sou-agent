@@ -123,8 +123,7 @@ def _run_async(coro):
             loop_ready.set()
             try:
                 asyncio.set_event_loop(worker_loop)
-                task = asyncio.ensure_future(coro, loop=worker_loop)
-                return worker_loop.run_until_complete(task)
+                return worker_loop.run_until_complete(coro)
             finally:
                 try:
                     # Cancel anything still pending (e.g. task cancelled
@@ -166,14 +165,30 @@ def _run_async(coro):
     # contention with the main thread's shared loop while keeping cached
     # httpx/AsyncOpenAI clients bound to a live loop for the thread's
     # lifetime — preventing "Event loop is closed" on GC cleanup.
+    #
+    # Exception: if the gateway is running, aiohttp ClientSessions inside the
+    # discord adapter capture the gateway's event loop at creation time.
+    # Running those coroutines on a different loop causes aiohttp's
+    # TimerContext to call asyncio.current_task(loop=gateway_loop) and find
+    # nothing, raising "Timeout context manager should be used inside a task".
+    # Route back to the gateway's loop via run_coroutine_threadsafe — the
+    # gateway loop is free to process tasks while this executor thread blocks.
     if threading.current_thread() is not threading.main_thread():
+        try:
+            from gateway.run import _get_gateway_loop
+            gateway_loop = _get_gateway_loop()
+        except Exception:
+            gateway_loop = None
+
+        if gateway_loop is not None:
+            future = asyncio.run_coroutine_threadsafe(coro, gateway_loop)
+            return future.result(timeout=300)
+
         worker_loop = _get_worker_loop()
-        task = asyncio.ensure_future(coro, loop=worker_loop)
-        return worker_loop.run_until_complete(task)
+        return worker_loop.run_until_complete(coro)
 
     tool_loop = _get_tool_loop()
-    task = asyncio.ensure_future(coro, loop=tool_loop)
-    return tool_loop.run_until_complete(task)
+    return tool_loop.run_until_complete(coro)
 
 
 # =============================================================================
