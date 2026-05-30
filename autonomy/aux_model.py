@@ -22,9 +22,13 @@ Output contract (WakeDecision)::
 import json
 import logging
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_AUTONOMY_LOG_DIR = Path.home() / ".hermes" / "autonomy" / "logs"
 
 _SYSTEM = (
     "You are the autonomy triage layer for an autonomous agent. Every few minutes you "
@@ -32,14 +36,32 @@ _SYSTEM = (
     "warrants waking the agent for a full session. Most cycles should NOT wake the agent — "
     "only wake when there is something the agent would actually want to act on or think "
     "about. Be conservative with the agent's attention.\n\n"
-    "Reply with ONLY a JSON object, no prose, matching:\n"
-    '{"wake": bool, "session_type": "outward"|"inward", "reason": str, '
-    '"signals": [{"signal_id": str, "type": str, "action": "respond"|"hold"|"self_reflect"|"ignore"}]}\n\n'
-    "session_type: 'outward' if the agent should say something externally, 'inward' if the "
-    "agent should only think/journal. Actions per signal: respond (say something), hold "
-    "(intends to respond but not yet — an intent will be created to come back to it), "
-    "self_reflect (process internally / journal), ignore (nothing needed). Intents and held "
-    "signals take priority over fresh environmental signals."
+
+    "Respond with **only** a valid JSON object. No introductory text, no explanation, "
+    "no markdown fences. The JSON must exactly match this structure:\n\n"
+
+    '{"wake": false, "session_type": "inward", "reason": "", "signals": []}\n\n'
+
+    "Field reference:\n"
+    '- wake (bool)       — true if the agent should be woken for a session\n'
+    '- session_type (str) — "outward" if the agent should say something externally,\n'
+    '                       "inward" if it should only think/journal\n'
+    '- reason (str)       — brief justification for the decision\n'
+    '- signals (array)    — per-signal action plan:\n'
+    '    {\n'
+    '      "signal_id": "discord:12345",\n'
+    '      "type": "discord",\n'
+    '      "action": "respond" | "hold" | "self_reflect" | "ignore"\n'
+    '    }\n\n'
+
+    "Action meanings:\n"
+    "- respond      — the agent should say something externally\n"
+    "- hold         — intends to respond but not yet; create an intent to come back\n"
+    "- self_reflect — process internally / journal\n"
+    "- ignore       — nothing needed\n\n"
+
+    "Intents and held signals take priority over fresh environmental signals.\n"
+    "Return JSON only. No prose."
 )
 
 
@@ -54,7 +76,7 @@ def _fmt_intents(snapshot: Dict[str, Any]) -> str:
         prio = it.get("priority", "normal")
         line = f"- [{it.get('signal_id') or 'intent:' + str(it.get('id'))}] ({prio}, origin={origin}) {desc}"
         if origin in ("hold", "self_reflect") and it.get("source_signal_id"):
-            line += f"  ↳ traces back to {it['source_signal_id']}"
+            line += f"  -> traces back to {it['source_signal_id']}"
         lines.append(line)
         # Normalize signal_id for the model so its decisions reference intents.
         if not it.get("signal_id") and it.get("id"):
@@ -68,7 +90,7 @@ def _fmt_held(snapshot: Dict[str, Any]) -> str:
         return ""
     lines = ["## Held signals [she already chose to come back to these]"]
     for h in held:
-        lines.append(f"- [{h.get('signal_id')}] \"{h.get('source_summary', '')}\" — held {h.get('held_since', '?')}")
+        lines.append(f"- [{h.get('signal_id')}] \"{h.get('source_summary', '')}\" - held {h.get('held_since', '?')}")
     return "\n".join(lines)
 
 
@@ -142,25 +164,108 @@ def build_aux_prompt(snapshot: Dict[str, Any]) -> str:
 _DEFAULT_DECISION = {"wake": False, "session_type": "inward", "reason": "", "signals": []}
 
 
+# ---------------------------------------------------------------------------
+# Debug logging — dump prompt + raw response on failure
+# ---------------------------------------------------------------------------
+
+
+def _dump_autonomy_log(prompt: str, raw_response: str = "", error: str = "") -> None:
+    """Save prompt, raw response, and error to ~/.hermes/autonomy/logs/{timestamp}.md.
+
+    Intended for debugging aux model failures — the same way cron jobs dump
+    their output to ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+    """
+    _AUTONOMY_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = _AUTONOMY_LOG_DIR / f"aux_{ts}.md"
+    parts = [f"# Autonomy Aux Log — {ts}"]
+    if error:
+        parts.append("")
+        parts.append("## Error")
+        parts.append(error)
+    parts.append("")
+    parts.append("## System Prompt")
+    parts.append("```")
+    parts.append(_SYSTEM)
+    parts.append("```")
+    parts.append("")
+    parts.append("## User Prompt")
+    parts.append("```")
+    parts.append(prompt)
+    parts.append("```")
+    parts.append("")
+    parts.append("## Raw Response")
+    parts.append("```")
+    parts.append(str(raw_response) if raw_response else "(no response received)")
+    parts.append("```")
+    path.write_text("\n".join(parts) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Wake decision parsing
+# ---------------------------------------------------------------------------
+
+
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+    """Find and parse the first valid JSON object in text.
+
+    Strategy, in order:
+      1. Try json.loads directly on the whole text.
+      2. Strip code fences (```json ... ```) and retry.
+      3. Brace-counting: find every outermost {...} pair with
+         balanced braces and attempt json.loads on each.
+      4. Last-resort greedy regex for degenerate cases.
+
+    Returns None when nothing works.
+    """
     if not text:
         return None
     text = text.strip()
-    # Strip ``` fences if present.
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text).strip()
+
+    # 1 — try the whole thing
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # Fallback: grab the first {...} blob.
+
+    # 2 — strip ``` fences
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text).strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+    # 3 — brace-counting: find outermost {...} with balanced braces
+    candidates = []
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidates.append(text[start : i + 1])
+                start = -1
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    # 4 — desperate last resort: greedy regex
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(0))
         except json.JSONDecodeError:
-            return None
+            pass
+
     return None
 
 
@@ -208,6 +313,7 @@ def decide_wake(snapshot: Dict[str, Any], aux_config: Optional[Dict[str, Any]] =
     prompt = build_aux_prompt(snapshot)
     logger.debug("autonomy aux prompt:\n%s", prompt)
 
+    raw_response = ""
     try:
         from agent import auxiliary_client
         resp = auxiliary_client.call_llm(
@@ -224,12 +330,18 @@ def decide_wake(snapshot: Dict[str, Any], aux_config: Optional[Dict[str, Any]] =
             max_tokens=800,
             timeout=aux_config.get("timeout"),
         )
-        content = resp.choices[0].message.content or ""
+        raw_response = resp.choices[0].message.content or ""
     except Exception:
         logger.exception("autonomy aux: model call failed; defaulting to no-wake")
+        _dump_autonomy_log(prompt, raw_response=raw_response, error="model call failed")
         return dict(_DEFAULT_DECISION)
 
-    decision = parse_wake_decision(content)
+    decision = parse_wake_decision(raw_response)
+
+    # Log when the model returned something but it wasn't valid JSON
+    if not isinstance(_extract_json(raw_response), dict):
+        _dump_autonomy_log(prompt, raw_response=raw_response, error="unparseable - model output did not contain valid JSON")
+
     logger.info(
         "autonomy aux decision: wake=%s type=%s signals=%d reason=%s",
         decision["wake"], decision["session_type"], len(decision["signals"]), decision["reason"][:80],
