@@ -242,6 +242,16 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
                 "       If a follow-up emerges, create an intent (origin='self_reflect').",
                 "",
             ]
+        elif action == "defer":
+            lines += [
+                "    => ACTION: DEFER — You weren't woken for anything urgent.",
+                "       This is a casual check-in cycle. Use session_search() to",
+                "       see what's been happening, journal_write if something's",
+                "       on your mind, or create intents for things you want to",
+                "       follow up on later. Speak only if there's something",
+                "       genuinely worth saying — otherwise reflect and move on.",
+                "",
+            ]
 
     # Context recall / continuity section for all session types.
     lines += [
