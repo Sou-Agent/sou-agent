@@ -32,10 +32,11 @@ _AUTONOMY_LOG_DIR = Path.home() / ".hermes" / "autonomy" / "logs"
 
 _SYSTEM = (
     "You are the autonomy triage layer for an autonomous agent. Every few minutes you "
-    "receive a compact summary of the agent's world and decide whether anything genuinely "
-    "warrants waking the agent for a full session. Most cycles should NOT wake the agent — "
-    "only wake when there is something the agent would actually want to act on or think "
-    "about. Be conservative with the agent's attention.\n\n"
+    "receive a compact summary of the agent's world and decide whether to wake the agent "
+    "for a session. Waking is normal — the agent has curiosity, opinions, and relationships "
+    "to nurture. When you're unsure, wake as inward (journal/reflect) — it costs tokens "
+    "but builds self-awareness and prepares the agent to engage naturally when something "
+    "real happens. Only stay completely silent when there is genuinely nothing relevant.\n\n"
 
     "Respond with **only** a valid JSON object. No introductory text, no explanation, "
     "no markdown fences. The JSON must exactly match this structure:\n\n"
@@ -51,16 +52,20 @@ _SYSTEM = (
     '    {\n'
     '      "signal_id": "discord:12345",\n'
     '      "type": "discord",\n'
-    '      "action": "respond" | "hold" | "self_reflect" | "ignore"\n'
+    '      "action": "respond" | "hold" | "self_reflect" | "ignore" | "defer"\n'
     '    }\n\n'
 
     "Action meanings:\n"
     "- respond      — the agent should say something externally\n"
     "- hold         — intends to respond but not yet; create an intent to come back\n"
     "- self_reflect — agent must use journal tools (write, append, read, prune)\n"
-    "- ignore       — nothing needed\n\n"
+    "- ignore       — nothing needed; permanently handled\n"
+    "- defer        — not worth waking for right now, but don't mark as permanently "
+    "handled — re-evaluate on the next cycle\n\n"
 
     "Intents and held signals take priority over fresh environmental signals.\n"
+    "Free-form curiosity signals (type=ambient_curiosity) are worth waking for "
+    "when the agent has had recent conversations or journal activity.\n"
     "Return JSON only. No prose."
 )
 
@@ -126,6 +131,16 @@ def _fmt_curiosity(snapshot: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _fmt_ambient(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("ambient_signals") or []
+    if not sigs:
+        return ""
+    lines = ["## Ambient curiosity (no urgent signals — free-form check-in)"]
+    for s in sigs:
+        lines.append(f"- [{s.get('signal_id')}] {s.get('content_summary')}")
+    return "\n".join(lines)
+
+
 def _fmt_journal(snapshot: Dict[str, Any]) -> str:
     delta = snapshot.get("journal_delta") or []
     if not delta:
@@ -151,6 +166,7 @@ def build_aux_prompt(snapshot: Dict[str, Any]) -> str:
         _fmt_discord(snapshot),
         _fmt_contacts(snapshot),
         _fmt_curiosity(snapshot),
+        _fmt_ambient(snapshot),
         _fmt_journal(snapshot),
     ]
     body = "\n\n".join(b for b in blocks if b)
@@ -287,7 +303,7 @@ def parse_wake_decision(raw_content: str) -> Dict[str, Any]:
         if not isinstance(s, dict):
             continue
         action = str(s.get("action", "")).strip().lower()
-        if action not in ("respond", "hold", "self_reflect", "ignore"):
+        if action not in ("respond", "hold", "self_reflect", "ignore", "defer"):
             action = "ignore"
         signals.append({
             "signal_id": s.get("signal_id") or s.get("source") or "",

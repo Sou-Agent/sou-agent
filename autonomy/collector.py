@@ -325,6 +325,45 @@ def _collect_curiosity(now: datetime, age_threshold_hours: float, handled_ids: s
     return out
 
 
+def _collect_ambient_curiosity(
+    now: datetime,
+    last_session_at: Optional[datetime],
+    last_cycle_at: Optional[datetime],
+    has_other_signals: bool,
+) -> List[Dict[str, Any]]:
+    """Generate a free-form curiosity signal when there's recent activity but nothing urgent.
+
+    Fires when:
+    - A session happened recently (within the last 24h) but not within the last 30min
+    - There are no other urgent signals (discord, intents, contact silence)
+    - Enough time has passed since the last cycle to avoid re-triggering every cycle
+
+    This produces a single ``ambient_curiosity`` signal that tells the aux model
+    "you've had conversations recently — worth checking in on anything?"
+    """
+    if last_session_at is None:
+        return []
+    time_since_session = now - last_session_at
+    time_since_cycle = (now - last_cycle_at) if last_cycle_at else timedelta()
+    # Only fire if: session was 30min-24h ago, it's been at least 12min since last cycle
+    if not (timedelta(minutes=30) <= time_since_session <= timedelta(hours=24)):
+        return []
+    if time_since_cycle < timedelta(minutes=12):
+        return []
+    if has_other_signals:
+        # Don't add ambient noise when there are real signals to process
+        return []
+    return [{
+        "signal_id": "ambient_curiosity",
+        "type": "ambient_curiosity",
+        "source": "collector",
+        "content_summary": (
+            f"Last session was {_humanize_gap(time_since_session)} ago — "
+            f"no urgent signals, but worth a casual check-in"
+        ),
+    }]
+
+
 # ---------------------------------------------------------------------------
 # Top-level collection
 # ---------------------------------------------------------------------------
@@ -416,6 +455,19 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         logger.exception("collector: journal delta collection failed")
         journal_delta = []
 
+    # --- Ambient curiosity (free-form check-in) ---
+    has_other_signals = bool(
+        triggered_intents or held_signals or discord["signals"]
+        or contact_signals or curiosity_signals
+    )
+    try:
+        ambient_signals = _collect_ambient_curiosity(
+            now, last_session_at, last_cycle_at, has_other_signals
+        )
+    except Exception:
+        logger.exception("collector: ambient curiosity collection failed")
+        ambient_signals = []
+
     snapshot.update({
         "triggered_intents": triggered_intents,
         "held_signals": held_signals,
@@ -423,6 +475,7 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "discord_signals": discord["signals"],
         "contact_signals": contact_signals,
         "curiosity_signals": curiosity_signals,
+        "ambient_signals": ambient_signals,
         "journal_delta": journal_delta,
         # internal — used by runner to persist watermarks after a cycle
         "_new_watermarks": discord["new_watermarks"],
@@ -430,7 +483,7 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
     snapshot["has_signals"] = bool(
         triggered_intents or held_signals or discord["signals"]
-        or contact_signals or curiosity_signals
+        or contact_signals or curiosity_signals or ambient_signals
     )
     return snapshot
 
