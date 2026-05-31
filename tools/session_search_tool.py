@@ -31,12 +31,64 @@ support.
 
 import json
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 # Sources that are excluded from session browsing/searching by default.
 # Third-party integrations tag their sessions with HERMES_SESSION_SOURCE=tool
 # so they don't clutter the user's session history.
 _HIDDEN_SESSION_SOURCES = ("tool", "autonomy", "cron")
+
+
+def _parse_iso_date(date_str: str) -> Optional[float]:
+    """Parse an ISO date string (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS) to Unix timestamp."""
+    if not date_str or not date_str.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(date_str.strip())
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _compute_time_bounds(
+    after_days_ago: Optional[int] = None,
+    before_days_ago: Optional[int] = None,
+    after_date: Optional[str] = None,
+    before_date: Optional[str] = None,
+) -> tuple:
+    """Compute (since_timestamp, until_timestamp) from time filter args.
+
+    ``since`` is the earliest timestamp to include (sessions started after this).
+    ``until`` is the latest timestamp to include (sessions started before this).
+    Both can be None (no bound in that direction).
+
+    ``after_days_ago`` and ``after_date`` are mutually exclusive-ish — the more
+    specific (date) wins if both are set. Same for ``before_days_ago`` and
+    ``before_date``.
+    """
+    now = time.time()
+    since: Optional[float] = None
+    until: Optional[float] = None
+
+    if after_date and after_date.strip():
+        parsed = _parse_iso_date(after_date)
+        if parsed is not None:
+            since = parsed
+    if since is None and after_days_ago is not None:
+        since = now - (after_days_ago * 86400)
+
+    if before_date and before_date.strip():
+        parsed = _parse_iso_date(before_date)
+        if parsed is not None:
+            until = parsed
+    if until is None and before_days_ago is not None:
+        until = now - (before_days_ago * 86400)
+
+    return since, until
 
 
 def _format_timestamp(ts: Union[int, float, str, None]) -> str:
@@ -107,7 +159,10 @@ def _shape_message(m: Dict[str, Any], anchor_id: Optional[int] = None) -> Dict[s
     return {k: v for k, v in entry.items() if v is not None or k in ("content",)}
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None, exclude_sources: List[str] = None) -> str:
+def _list_recent_sessions(db, limit: int, current_session_id: str = None,
+                          exclude_sources: List[str] = None,
+                          since_timestamp: Optional[float] = None,
+                          until_timestamp: Optional[float] = None) -> str:
     """Return metadata for the most recent sessions (no LLM calls, no FTS5)."""
     try:
         use_sources = exclude_sources if exclude_sources is not None else list(_HIDDEN_SESSION_SOURCES)
@@ -127,6 +182,14 @@ def _list_recent_sessions(db, limit: int, current_session_id: str = None, exclud
             # Skip child / delegation sessions
             if s.get("parent_session_id"):
                 continue
+            # Time filtering on session started_at
+            started_raw = s.get("started_at")
+            if started_raw is not None and isinstance(started_raw, (int, float)):
+                started_ts = float(started_raw) if not isinstance(started_raw, float) else started_raw
+                if since_timestamp is not None and started_ts < since_timestamp:
+                    continue
+                if until_timestamp is not None and started_ts > until_timestamp:
+                    continue
             results.append({
                 "session_id": sid,
                 "title": s.get("title") or None,
@@ -283,6 +346,8 @@ def _discover(
     sort: Optional[str],
     current_session_id: str = None,
     exclude_sources: List[str] = None,
+    since_timestamp: Optional[float] = None,
+    until_timestamp: Optional[float] = None,
 ) -> str:
     """Discovery shape: FTS5 + anchored window + bookends per hit. Single call."""
     role_list = role_filter if role_filter else ["user", "assistant"]
@@ -310,6 +375,34 @@ def _discover(
             "count": 0,
             "message": "No matching sessions found.",
         }, ensure_ascii=False)
+
+    # Apply time filtering on message timestamps
+    if since_timestamp is not None or until_timestamp is not None:
+        filtered = []
+        for r in raw_results:
+            ts = r.get("timestamp")
+            if ts is None:
+                continue
+            try:
+                ts_f = float(ts)
+            except (TypeError, ValueError):
+                filtered.append(r)
+                continue
+            if since_timestamp is not None and ts_f < since_timestamp:
+                continue
+            if until_timestamp is not None and ts_f > until_timestamp:
+                continue
+            filtered.append(r)
+        raw_results = filtered
+        if not raw_results:
+            return json.dumps({
+                "success": True,
+                "mode": "discover",
+                "query": query,
+                "results": [],
+                "count": 0,
+                "message": "No matching sessions found in the specified time range.",
+            }, ensure_ascii=False)
 
     current_lineage_root = _resolve_to_parent(db, current_session_id) if current_session_id else None
 
@@ -383,6 +476,11 @@ def session_search(
     role_filter: str = None,
     limit: int = 3,
     exclude_sources: str = None,
+    # Time filters
+    after_days_ago: int = None,
+    before_days_ago: int = None,
+    after_date: str = None,
+    before_date: str = None,
     db=None,
     current_session_id: str = None,
     # Scroll shape
@@ -410,6 +508,14 @@ def session_search(
             from hermes_state import format_session_db_unavailable
             return tool_error(format_session_db_unavailable(), success=False)
 
+    # Compute time bounds from filter args
+    since_ts, until_ts = _compute_time_bounds(
+        after_days_ago=after_days_ago,
+        before_days_ago=before_days_ago,
+        after_date=after_date,
+        before_date=before_date,
+    )
+
     # Scroll shape takes precedence — explicit anchor beats any query.
     if (isinstance(session_id, str) and session_id.strip()) and around_message_id is not None:
         return _scroll(
@@ -427,10 +533,6 @@ def session_search(
         except (TypeError, ValueError):
             limit = 3
     limit = max(1, min(limit, 10))
-
-    # Browse shape: no query → recent sessions.
-    if not query or not isinstance(query, str) or not query.strip():
-        return _list_recent_sessions(db, limit, current_session_id)
 
     # Parse role_filter
     role_list: Optional[List[str]] = None
@@ -454,8 +556,14 @@ def session_search(
         if candidate in ("newest", "oldest"):
             sort_norm = candidate
 
+    # Browse shape: no query → recent sessions.
     if not query or not isinstance(query, str) or not query.strip():
-        return _list_recent_sessions(db, limit, current_session_id, exclude_sources=exclude_list)
+        return _list_recent_sessions(
+            db, limit, current_session_id,
+            exclude_sources=exclude_list,
+            since_timestamp=since_ts,
+            until_timestamp=until_ts,
+        )
 
     return _discover(
         db=db,
@@ -465,6 +573,8 @@ def session_search(
         sort=sort_norm,
         current_session_id=current_session_id,
         exclude_sources=exclude_list,
+        since_timestamp=since_ts,
+        until_timestamp=until_ts,
     )
 
 
@@ -600,6 +710,39 @@ SESSION_SEARCH_SCHEMA = {
                     "Pass specific sources like 'discord' to narrow to only those."
                 ),
             },
+            # Time filters (discovery + browse shape)
+            "after_days_ago": {
+                "type": "integer",
+                "description": (
+                    "Optional. Show only sessions from the last N days. "
+                    "E.g. after_days_ago=7 shows only the last week."
+                ),
+            },
+            "before_days_ago": {
+                "type": "integer",
+                "description": (
+                    "Optional. Show only sessions older than N days. "
+                    "Combine with after_days_ago to get a range: "
+                    "after_days_ago=14, before_days_ago=7 shows sessions "
+                    "between 14 and 7 days ago."
+                ),
+            },
+            "after_date": {
+                "type": "string",
+                "description": (
+                    "Optional. ISO date string (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS). "
+                    "Show only sessions started on or after this date. "
+                    "Takes precedence over after_days_ago if both are set."
+                ),
+            },
+            "before_date": {
+                "type": "string",
+                "description": (
+                    "Optional. ISO date string (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS). "
+                    "Show only sessions started on or before this date. "
+                    "Takes precedence over before_days_ago if both are set."
+                ),
+            },
         },
         "required": [],
     },
@@ -618,6 +761,10 @@ registry.register(
         role_filter=args.get("role_filter"),
         limit=args.get("limit", 3),
         exclude_sources=args.get("exclude_sources"),
+        after_days_ago=args.get("after_days_ago"),
+        before_days_ago=args.get("before_days_ago"),
+        after_date=args.get("after_date"),
+        before_date=args.get("before_date"),
         session_id=args.get("session_id"),
         around_message_id=args.get("around_message_id"),
         window=args.get("window", 5),
