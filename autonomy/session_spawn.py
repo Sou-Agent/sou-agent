@@ -253,6 +253,37 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
                 "",
             ]
 
+    # --- Self-directed intents (origin=myself) ---
+    # Check if any signal came from a myself-origin intent
+    _has_myself = any(
+        s.get("action") and s.get("signal_id", "").startswith("intent:")
+        for s in decision.get("signals", [])
+    )
+    # Also check in the raw snapshot
+    if not _has_myself and snapshot:
+        for it in (snapshot.get("triggered_intents") or []):
+            if it.get("origin") == "myself":
+                _has_myself = True
+                break
+
+    if _has_myself:
+        lines += [
+            "",
+            "--- SELF-DIRECTED INTENTS (origin=myself) ---",
+            "Some of these signals come from intents you wrote for yourself.",
+            "These are things YOU genuinely want to do — not reactions to",
+            "someone else's message. Treat them as worthy of your attention:",
+            "",
+            "  - Read the intent description and decide if now is the right time",
+            "  - If yes: act on it. Use discord_dm, journal, whatever fits.",
+            "  - If not now but still valid: leave the intent pending.",
+            "  - If done or no longer relevant: complete or dismiss the intent.",
+            "",
+            "These are YOUR desires. Don't dismiss them just because there's",
+            "no external pressure to act on them.",
+            "",
+        ]
+
     # Context recall / continuity section for all session types.
     lines += [
         "",

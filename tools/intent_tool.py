@@ -146,7 +146,8 @@ _SCHEMA = {
                 "description": (
                     "[intent_add] Why this intent exists. Use 'hold' when noting that you intend "
                     "to respond to a signal later, 'self_reflect' when a follow-up surfaced during "
-                    "reflection, otherwise leave as 'free'."
+                    "reflection, 'myself' when it's something you want to do for yourself, "
+                    "otherwise leave as 'free'."
                 ),
             },
             "source_signal_id": {

@@ -64,6 +64,9 @@ _SYSTEM = (
     "handled — re-evaluate on the next cycle\n\n"
 
     "Intents and held signals take priority over fresh environmental signals.\n"
+    "Pay special attention to intents with ``origin=myself`` — these are things "
+    "the agent genuinely wants to do for herself, not reactive obligations. "
+    "They are worth waking for even when nothing else is happening.\n"
     "Free-form curiosity signals (type=ambient_curiosity) are worth waking for "
     "when the agent has had recent conversations or journal activity.\n"
     "Return JSON only. No prose."
