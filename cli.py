@@ -6458,6 +6458,17 @@ class HermesCLI:
                 self._session_db.end_session(old_session_id, "new_session")
             except Exception:
                 pass
+            try:
+                from training.collector import capture_session, is_enabled
+                if is_enabled():
+                    capture_session(
+                        session_id=old_session_id,
+                        session_type=getattr(self, "platform", "") or "cli",
+                        db=self._session_db,
+                        extra_meta={"completed": True, "exit_reason": "user_reset"},
+                    )
+            except Exception:
+                pass
 
         self.session_start = datetime.now()
         timestamp_str = self.session_start.strftime("%Y%m%d_%H%M%S")
