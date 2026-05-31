@@ -38,6 +38,10 @@ _SYSTEM = (
     "but builds self-awareness and prepares the agent to engage naturally when something "
     "real happens. Only stay completely silent when there is genuinely nothing relevant.\n\n"
 
+    "The time-since-last-session shown below is just informational context — it is not "
+    "a rule. Do not use recency as a reason to skip waking. Intents (especially origin=myself), "
+    "held signals, and new incoming messages matter regardless of when the last session was.\n\n"
+
     "Respond with **only** a valid JSON object. No introductory text, no explanation, "
     "no markdown fences. The JSON must exactly match this structure:\n\n"
 
@@ -64,6 +68,9 @@ _SYSTEM = (
     "handled — re-evaluate on the next cycle\n\n"
 
     "Intents and held signals take priority over fresh environmental signals.\n"
+    "Pay special attention to intents with ``origin=myself`` — these are things "
+    "the agent genuinely wants to do for themselves, not reactive obligations. "
+    "They are worth waking for even when nothing else is happening.\n"
     "Free-form curiosity signals (type=ambient_curiosity) are worth waking for "
     "when the agent has had recent conversations or journal activity.\n"
     "Return JSON only. No prose."
@@ -93,7 +100,7 @@ def _fmt_held(snapshot: Dict[str, Any]) -> str:
     held = snapshot.get("held_signals") or []
     if not held:
         return ""
-    lines = ["## Held signals [she already chose to come back to these]"]
+    lines = ["## Held signals [already chose to come back to these]"]
     for h in held:
         lines.append(f"- [{h.get('signal_id')}] \"{h.get('source_summary', '')}\" - held {h.get('held_since', '?')}")
     return "\n".join(lines)

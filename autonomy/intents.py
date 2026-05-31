@@ -10,6 +10,7 @@ Each intent records its ``origin`` — why it was created:
   - ``hold``         created while holding a specific signal, to come back to it
   - ``self_reflect`` realized during reflection that a follow-up is wanted
   - ``cron``         created during a scheduled cron session
+  - ``myself``       something Sou wants to do for herself — not reactive, purely self-directed
 When origin is ``hold`` or ``self_reflect``, ``source_signal_id`` links back to
 the originating entry in the response log, so the full history is reconstructable.
 
@@ -31,7 +32,7 @@ _INTENTS_LOCK = threading.RLock()
 
 VALID_STATUSES = ("pending", "triggered", "completed", "dismissed")
 VALID_PRIORITIES = ("low", "normal", "high")
-VALID_ORIGINS = ("free", "hold", "self_reflect", "cron")
+VALID_ORIGINS = ("free", "hold", "self_reflect", "cron", "myself")
 
 
 def _now_iso() -> str:
