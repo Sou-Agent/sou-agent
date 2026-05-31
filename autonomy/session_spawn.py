@@ -471,7 +471,8 @@ def _link_holds(decision: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def spawn_autonomy_session(decision: Dict[str, Any], config: Optional[Dict[str, Any]] = None,
-                            snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                            snapshot: Optional[Dict[str, Any]] = None,
+                            wake_session_id: Optional[str] = None) -> Dict[str, Any]:
     """Run a full agent session for a wake decision. Returns a result dict.
 
     ``{"fired": bool, "reason": str, "final_response": str, "session_id": str}``
@@ -543,6 +544,30 @@ def spawn_autonomy_session(decision: Dict[str, Any], config: Optional[Dict[str, 
     _record_session(estimated_tokens, session_id)
 
     logger.info("autonomy: session %s complete (~%d tokens)", session_id, estimated_tokens)
+
+    # Training data: capture autonomy session transcript
+    try:
+        from training.collector import capture_autonomy, is_enabled
+        if is_enabled():
+            from hermes_state import SessionDB
+            from hermes_constants import get_hermes_home
+            _db = SessionDB(get_hermes_home() / "state.db")
+            try:
+                capture_autonomy(
+                    session_id=session_id,
+                    db=_db,
+                    decision=decision,
+                    extra_meta={
+                        "wake_session_id": wake_session_id or "",
+                        "completed": True,
+                        "final_response": final_response,
+                    },
+                )
+            finally:
+                _db.close()
+    except Exception:
+        logger.debug("autonomy: training session capture failed", exc_info=True)
+
     return {
         "fired": True,
         "reason": decision.get("reason", ""),

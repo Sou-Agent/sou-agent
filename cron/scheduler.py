@@ -1830,6 +1830,22 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
                 _session_db.end_session(_cron_session_id, "cron_complete")
             except (Exception, KeyboardInterrupt) as e:
                 logger.debug("Job '%s': failed to end session: %s", job_id, e)
+            # Training data capture — must run after end_session() but before close().
+            try:
+                from training.collector import capture_cron, is_enabled
+                if is_enabled():
+                    capture_cron(
+                        session_id=_cron_session_id,
+                        job=job,
+                        db=_session_db,
+                        extra_meta={
+                            "completed": not _inactivity_timeout,
+                            "exit_reason": "inactivity_timeout" if _inactivity_timeout else "",
+                            "model": model,
+                        },
+                    )
+            except (Exception, KeyboardInterrupt) as e:
+                logger.debug("Job '%s': training capture failed: %s", job_id, e)
             try:
                 _session_db.close()
             except (Exception, KeyboardInterrupt) as e:

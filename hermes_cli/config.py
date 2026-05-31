@@ -2129,8 +2129,24 @@ DEFAULT_CONFIG = {
     "paste_collapse_char_threshold": 2000,
 
 
+    # Training data collection — fork-specific, not for upstream contribution.
+    # When enabled, session transcripts are written to base_path in structured
+    # JSON format for use in a fine-tuning pipeline.  Zero overhead when disabled.
+    "training_data": {
+        "enabled": False,
+        # Base directory. Empty string defaults to {hermes_home}/training_data.
+        "base_path": "",
+        # Session types to exclude even when enabled.
+        # Valid values: "cli", "autonomy", "cron", "wake", or any gateway platform name.
+        "exclude_session_types": [],
+        # Include full system prompts in captured records (can be large).
+        "capture_system_prompts": True,
+        # Include auto-injected context blocks in captured records.
+        "capture_auto_injections": True,
+    },
+
     # Config schema version - bump this when adding new required fields
-    "_config_version": 24,
+    "_config_version": 25,
 }
 
 # =============================================================================
@@ -3305,11 +3321,16 @@ def _set_nested(config, dotted_key: str, value):
 def get_missing_config_fields() -> List[Dict[str, Any]]:
     """
     Check which config fields are missing or outdated (recursive).
-    
+
     Walks the DEFAULT_CONFIG tree at arbitrary depth and reports any keys
-    present in defaults but absent from the user's loaded config.
+    present in defaults but absent from the user's on-disk config.yaml.
+
+    Uses read_raw_config() (no default-merge) so that keys added in a new
+    version are actually detected as missing.  load_config() deep-merges
+    DEFAULT_CONFIG as the base, so comparing against it would never find
+    anything absent.
     """
-    config = load_config()
+    raw = read_raw_config()
     missing = []
 
     def _check(defaults: dict, current: dict, prefix: str = ""):
@@ -3326,7 +3347,7 @@ def get_missing_config_fields() -> List[Dict[str, Any]]:
             elif isinstance(default_value, dict) and isinstance(current.get(key), dict):
                 _check(default_value, current[key], full_key)
 
-    _check(DEFAULT_CONFIG, config)
+    _check(DEFAULT_CONFIG, raw)
     return missing
 
 
@@ -3660,7 +3681,7 @@ _KNOWN_ROOT_KEYS = {
     "fallback_providers", "credential_pool_strategies", "toolsets",
     "agent", "terminal", "display", "compression", "delegation",
     "auxiliary", "custom_providers", "context", "memory", "gateway",
-    "sessions",
+    "sessions", "training_data",
 }
 
 # Valid fields inside a custom_providers list entry
@@ -3814,6 +3835,50 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
             "    default: your-model-name\n"
             "    base_url: https://...",
         ))
+
+    # ── training_data section ────────────────────────────────────────────
+    td = config.get("training_data")
+    if td is not None:
+        _KNOWN_TRAINING_DATA_KEYS = {
+            "enabled", "base_path", "exclude_session_types",
+            "capture_system_prompts", "capture_auto_injections",
+        }
+        if not isinstance(td, dict):
+            issues.append(ConfigIssue(
+                "error",
+                f"training_data should be a dict, got {type(td).__name__}",
+                "Change to:\n  training_data:\n    enabled: true",
+            ))
+        else:
+            unknown_td = set(td.keys()) - _KNOWN_TRAINING_DATA_KEYS
+            if unknown_td:
+                issues.append(ConfigIssue(
+                    "warning",
+                    f"training_data: unknown keys ignored: {sorted(unknown_td)}",
+                    f"Valid keys: {sorted(_KNOWN_TRAINING_DATA_KEYS)}",
+                ))
+            for bool_key in ("enabled", "capture_system_prompts", "capture_auto_injections"):
+                val = td.get(bool_key)
+                if val is not None and not isinstance(val, bool):
+                    issues.append(ConfigIssue(
+                        "error",
+                        f"training_data.{bool_key} must be true or false, got {type(val).__name__} ({val!r})",
+                        f"Change to: {bool_key}: true  (or false)",
+                    ))
+            bp = td.get("base_path")
+            if bp is not None and not isinstance(bp, str):
+                issues.append(ConfigIssue(
+                    "error",
+                    f"training_data.base_path must be a string, got {type(bp).__name__}",
+                    "Example: base_path: /data/hermes/training  (or leave empty for default)",
+                ))
+            est = td.get("exclude_session_types")
+            if est is not None and not isinstance(est, list):
+                issues.append(ConfigIssue(
+                    "error",
+                    "training_data.exclude_session_types must be a YAML list",
+                    "Change to:\n  exclude_session_types:\n    - cron\n    - wake",
+                ))
 
     # ── Root-level keys that look misplaced ──────────────────────────────
     for key in config:
