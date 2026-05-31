@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional, Union
 # Sources that are excluded from session browsing/searching by default.
 # Third-party integrations tag their sessions with HERMES_SESSION_SOURCE=tool
 # so they don't clutter the user's session history.
-_HIDDEN_SESSION_SOURCES = ("tool",)
+_HIDDEN_SESSION_SOURCES = ("tool", "autonomy", "cron")
 
 
 def _format_timestamp(ts: Union[int, float, str, None]) -> str:
@@ -107,12 +107,13 @@ def _shape_message(m: Dict[str, Any], anchor_id: Optional[int] = None) -> Dict[s
     return {k: v for k, v in entry.items() if v is not None or k in ("content",)}
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None) -> str:
+def _list_recent_sessions(db, limit: int, current_session_id: str = None, exclude_sources: List[str] = None) -> str:
     """Return metadata for the most recent sessions (no LLM calls, no FTS5)."""
     try:
+        use_sources = exclude_sources if exclude_sources is not None else list(_HIDDEN_SESSION_SOURCES)
         sessions = db.list_sessions_rich(
             limit=limit + 5,
-            exclude_sources=list(_HIDDEN_SESSION_SOURCES),
+            exclude_sources=use_sources,
             order_by_last_active=True,
         )  # fetch extra so we can skip current
 
@@ -281,15 +282,17 @@ def _discover(
     limit: int,
     sort: Optional[str],
     current_session_id: str = None,
+    exclude_sources: List[str] = None,
 ) -> str:
     """Discovery shape: FTS5 + anchored window + bookends per hit. Single call."""
     role_list = role_filter if role_filter else ["user", "assistant"]
 
     try:
+        use_sources = exclude_sources if exclude_sources is not None else list(_HIDDEN_SESSION_SOURCES)
         raw_results = db.search_messages(
             query=query,
             role_filter=role_list,
-            exclude_sources=list(_HIDDEN_SESSION_SOURCES),
+            exclude_sources=use_sources,
             limit=50,  # widen so dedup-by-lineage can find distinct sessions
             offset=0,
             sort=sort,
@@ -379,6 +382,7 @@ def session_search(
     query: str = "",
     role_filter: str = None,
     limit: int = 3,
+    exclude_sources: str = None,
     db=None,
     current_session_id: str = None,
     # Scroll shape
@@ -433,12 +437,25 @@ def session_search(
     if isinstance(role_filter, str) and role_filter.strip():
         role_list = [r.strip() for r in role_filter.split(",") if r.strip()]
 
+    # Parse exclude_sources — override defaults when explicitly provided
+    exclude_list: Optional[List[str]] = None
+    if isinstance(exclude_sources, str):
+        stripped = exclude_sources.strip()
+        if stripped:
+            exclude_list = [s.strip() for s in stripped.split(",") if s.strip()]
+        else:
+            # Empty string = no exclusions at all (show everything)
+            exclude_list = []
+
     # Normalise sort
     sort_norm: Optional[str] = None
     if isinstance(sort, str):
         candidate = sort.strip().lower()
         if candidate in ("newest", "oldest"):
             sort_norm = candidate
+
+    if not query or not isinstance(query, str) or not query.strip():
+        return _list_recent_sessions(db, limit, current_session_id, exclude_sources=exclude_list)
 
     return _discover(
         db=db,
@@ -447,6 +464,7 @@ def session_search(
         limit=limit,
         sort=sort_norm,
         current_session_id=current_session_id,
+        exclude_sources=exclude_list,
     )
 
 
@@ -573,6 +591,15 @@ SESSION_SEARCH_SCHEMA = {
                     "behaviour) or 'tool' to search tool output only."
                 ),
             },
+            "exclude_sources": {
+                "type": "string",
+                "description": (
+                    "Optional. Comma-separated session source types to exclude "
+                    "from results. Default excludes autonomy, cron, and tool sessions. "
+                    "Pass an empty string '' to show all sessions (including autonomy/cron). "
+                    "Pass specific sources like 'discord' to narrow to only those."
+                ),
+            },
         },
         "required": [],
     },
@@ -590,6 +617,7 @@ registry.register(
         query=args.get("query") or "",
         role_filter=args.get("role_filter"),
         limit=args.get("limit", 3),
+        exclude_sources=args.get("exclude_sources"),
         session_id=args.get("session_id"),
         around_message_id=args.get("around_message_id"),
         window=args.get("window", 5),
