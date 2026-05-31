@@ -102,6 +102,8 @@ class TestSchema:
 class TestHiddenSources:
     def test_tool_source_hidden(self):
         assert "tool" in _HIDDEN_SESSION_SOURCES
+        assert "autonomy" in _HIDDEN_SESSION_SOURCES
+        assert "cron" in _HIDDEN_SESSION_SOURCES
 
 
 class TestFormatTimestamp:
