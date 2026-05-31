@@ -74,17 +74,58 @@ def run_autonomy_cycle(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any
             collector.commit_cycle(snapshot, session_fired=False)
             return status
 
+        _wake_ts = _now()
+        _wake_session_id = f"wake_{_wake_ts.strftime('%Y%m%d_%H%M%S')}"
+
         decision = aux_model.decide_wake(snapshot)
         status["woke"] = decision.get("wake", False)
 
         fired = False
+        result: Dict[str, Any] = {}
         if decision.get("wake"):
-            result = session_spawn.spawn_autonomy_session(decision, config, snapshot=snapshot)
+            result = session_spawn.spawn_autonomy_session(
+                decision, config, snapshot=snapshot,
+                wake_session_id=_wake_session_id,
+            )
             fired = result.get("fired", False)
             status["fired"] = fired
             status["session_id"] = result.get("session_id", "")
 
         collector.commit_cycle(snapshot, session_fired=fired)
+
+        # Training data: capture wake evaluation record
+        try:
+            from training.collector import capture_wake, is_enabled
+            if is_enabled():
+                _full_prompt = aux_model.build_aux_prompt(snapshot)
+                _suppressed = (
+                    decision.get("wake", False)
+                    and not fired
+                    and "rate limited" in result.get("reason", "").lower()
+                )
+                from training.collector import _wake_decision_str
+                capture_wake({
+                    "wake_session_id": _wake_session_id,
+                    "timestamp": _wake_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "system_prompt": aux_model._SYSTEM if hasattr(aux_model, "_SYSTEM") else "",
+                    "auto_injections": [],
+                    "direction": decision.get("session_type", "inward"),
+                    "evaluation_context": snapshot,
+                    "aux_model": "",
+                    "full_prompt": _full_prompt,
+                    "reasoning": decision.get("reason", ""),
+                    "decision": _wake_decision_str(decision, fired, _suppressed),
+                    "action_taken": ",".join(sorted({
+                        s.get("action", "") for s in decision.get("signals", []) if s.get("action")
+                    })),
+                    "suppressed": _suppressed,
+                    "suppression_reason": result.get("reason", "") if _suppressed else "",
+                    "rate_limited": _suppressed,
+                    "resulted_in_session_id": result.get("session_id") or None,
+                })
+        except Exception:
+            logger.debug("autonomy: training wake capture failed", exc_info=True)
+
     except Exception:
         logger.exception("autonomy: cycle failed")
     return status

@@ -965,6 +965,22 @@ def _run_cleanup():
                 _active_agent_ref.shutdown_memory_provider()
     except Exception:
         pass
+    # Training data capture — after memory provider shutdown so the DB is fully
+    # flushed before we read it back.
+    try:
+        from training.collector import capture_session, is_enabled
+        _agent = _active_agent_ref
+        if (is_enabled() and _agent is not None
+                and getattr(_agent, "session_id", None)
+                and getattr(_agent, "_session_db", None)):
+            capture_session(
+                session_id=_agent.session_id,
+                session_type=getattr(_agent, "platform", "") or "cli",
+                db=_agent._session_db,
+                extra_meta={"completed": True, "exit_reason": "user_exit"},
+            )
+    except Exception:
+        pass
 
 
 # =============================================================================

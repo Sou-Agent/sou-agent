@@ -8192,6 +8192,27 @@ class GatewayRunner:
                 ):
                     audio_paths.append(path)
 
+            # Training data: copy attachments to the training folder NOW, before
+            # the cache can be cleaned up.  Must run before any analysis that might
+            # delete or overwrite the cached files.
+            try:
+                from training.collector import capture_attachment, is_enabled
+                if is_enabled():
+                    _si_entry = (getattr(self, "session_store", None) and
+                                 getattr(self.session_store, "_entries", {}).get(session_key))
+                    _sid = _si_entry.session_id if _si_entry else None
+                    if _sid:
+                        _platform = (source.platform.value
+                                     if hasattr(source.platform, "value")
+                                     else str(source.platform))
+                        for _i, _path in enumerate(event.media_urls):
+                            _mtype = (event.media_types[_i]
+                                      if _i < len(getattr(event, "media_types", []))
+                                      else "")
+                            capture_attachment(_sid, _platform, _path, os.path.basename(_path), _mtype)
+            except Exception:
+                pass
+
             if image_paths:
                 # Decide routing: native (attach pixels) vs text (vision_analyze
                 # pre-run + prepend description).  See agent/image_routing.py.

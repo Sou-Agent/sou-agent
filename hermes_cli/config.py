@@ -2129,8 +2129,24 @@ DEFAULT_CONFIG = {
     "paste_collapse_char_threshold": 2000,
 
 
+    # Training data collection — fork-specific, not for upstream contribution.
+    # When enabled, session transcripts are written to base_path in structured
+    # JSON format for use in a fine-tuning pipeline.  Zero overhead when disabled.
+    "training_data": {
+        "enabled": False,
+        # Base directory. Empty string defaults to {hermes_home}/training_data.
+        "base_path": "",
+        # Session types to exclude even when enabled.
+        # Valid values: "cli", "autonomy", "cron", "wake", or any gateway platform name.
+        "exclude_session_types": [],
+        # Include full system prompts in captured records (can be large).
+        "capture_system_prompts": True,
+        # Include auto-injected context blocks in captured records.
+        "capture_auto_injections": True,
+    },
+
     # Config schema version - bump this when adding new required fields
-    "_config_version": 24,
+    "_config_version": 25,
 }
 
 # =============================================================================
@@ -3660,7 +3676,7 @@ _KNOWN_ROOT_KEYS = {
     "fallback_providers", "credential_pool_strategies", "toolsets",
     "agent", "terminal", "display", "compression", "delegation",
     "auxiliary", "custom_providers", "context", "memory", "gateway",
-    "sessions",
+    "sessions", "training_data",
 }
 
 # Valid fields inside a custom_providers list entry
