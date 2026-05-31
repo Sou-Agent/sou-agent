@@ -1191,6 +1191,22 @@ class SessionStore:
                 self._db.end_session(db_end_session_id, "session_reset")
             except Exception as e:
                 logger.debug("Session DB operation failed: %s", e)
+            try:
+                from training.collector import capture_session, is_enabled
+                if is_enabled():
+                    _old_row = self._db.get_session(db_end_session_id)
+                    _platform_str = (
+                        _old_row.get("source", "") if _old_row
+                        else (db_create_kwargs or {}).get("source", "unknown")
+                    )
+                    capture_session(
+                        session_id=db_end_session_id,
+                        session_type=_platform_str,
+                        db=self._db,
+                        extra_meta={"completed": True, "exit_reason": "user_reset"},
+                    )
+            except Exception:
+                pass
 
         if self._db and db_create_kwargs:
             try:
