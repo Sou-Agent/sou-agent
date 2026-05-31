@@ -115,11 +115,12 @@ class TestUtcIso:
 
     def test_unix_timestamp(self):
         from training.collector import _utc_iso
-        ts = 1748693000.0
+        # 1798761600.0 = 2027-01-01T00:00:00Z
+        ts = 1798761600.0
         result = _utc_iso(ts)
         assert result.endswith("Z")
         assert "T" in result
-        assert "2026" in result
+        assert "2027" in result
 
     def test_format_matches_iso8601(self):
         from training.collector import _utc_iso
