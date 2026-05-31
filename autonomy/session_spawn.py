@@ -225,7 +225,10 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
             lines += [
                 "    => ACTION: HOLD — Create an intent with origin='hold' and",
                 "       source_signal_id set. You'll come back to this on the next cycle.",
-                "       If there's something concrete to follow up on, add it as an intent.",
+                "       If something from your own thoughts or journal surfaces while",
+                "       you're here, create a separate intent with origin='myself' so",
+                "       the system knows it's something YOU want to do, not just a",
+                "       reaction to someone else's signal.",
                 "",
             ]
         elif action == "self_reflect":
@@ -239,7 +242,9 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
                 "       session_search() to review recent conversations and",
                 "       recall what happened yesterday.",
                 "       No journal interaction = you didn't do the task.",
-                "       If a follow-up emerges, create an intent (origin='self_reflect').",
+                "       If a follow-up emerges, create an intent with the right",
+                "       origin: 'self_reflect' for reactive follow-ups, or 'myself'",
+                "       for things you genuinely want for yourself.",
                 "",
             ]
         elif action == "defer":
@@ -248,8 +253,10 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
                 "       This is a casual check-in cycle. Use session_search() to",
                 "       see what's been happening, journal_write if something's",
                 "       on your mind, or create intents for things you want to",
-                "       follow up on later. Speak only if there's something",
-                "       genuinely worth saying — otherwise reflect and move on.",
+                "       follow up on later (use origin='myself' if it's something",
+                "       YOU want to do, not just a reaction to others).",
+                "       Speak only if there's something genuinely worth saying —",
+                "       otherwise reflect and move on.",
                 "",
             ]
 
