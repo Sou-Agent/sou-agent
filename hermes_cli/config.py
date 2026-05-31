@@ -3321,11 +3321,16 @@ def _set_nested(config, dotted_key: str, value):
 def get_missing_config_fields() -> List[Dict[str, Any]]:
     """
     Check which config fields are missing or outdated (recursive).
-    
+
     Walks the DEFAULT_CONFIG tree at arbitrary depth and reports any keys
-    present in defaults but absent from the user's loaded config.
+    present in defaults but absent from the user's on-disk config.yaml.
+
+    Uses read_raw_config() (no default-merge) so that keys added in a new
+    version are actually detected as missing.  load_config() deep-merges
+    DEFAULT_CONFIG as the base, so comparing against it would never find
+    anything absent.
     """
-    config = load_config()
+    raw = read_raw_config()
     missing = []
 
     def _check(defaults: dict, current: dict, prefix: str = ""):
@@ -3342,7 +3347,7 @@ def get_missing_config_fields() -> List[Dict[str, Any]]:
             elif isinstance(default_value, dict) and isinstance(current.get(key), dict):
                 _check(default_value, current[key], full_key)
 
-    _check(DEFAULT_CONFIG, config)
+    _check(DEFAULT_CONFIG, raw)
     return missing
 
 
