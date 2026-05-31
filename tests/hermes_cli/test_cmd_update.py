@@ -241,6 +241,45 @@ class TestCmdUpdateBranchFallback:
             assert "applying safe config migrations" in captured.out
             assert "API keys require manual entry" in captured.out
 
+    def test_gateway_update_does_not_block_on_config_migration_prompt(
+        self, mock_args, capsys
+    ):
+        """Gateway mode must auto-apply safe migrations without calling _gateway_prompt.
+
+        Regression guard: the old code called _gateway_prompt() with a 300-second
+        timeout during gateway updates, causing a 5-minute stall because the
+        gateway is draining and can't forward the IPC prompt.
+        """
+        mock_args.gateway = True
+        with patch("shutil.which", return_value=None), patch(
+            "subprocess.run"
+        ) as mock_run, patch("builtins.input") as mock_input, patch(
+            "hermes_cli.main._gateway_prompt"
+        ) as mock_gw_prompt, patch(
+            "hermes_cli.config.get_missing_env_vars", return_value=["MISSING_KEY"]
+        ), patch(
+            "hermes_cli.config.get_missing_config_fields",
+            return_value=[{"key": "new.option", "default": True}],
+        ), patch(
+            "hermes_cli.config.check_config_version", return_value=(1, 2)
+        ), patch(
+            "hermes_cli.config.migrate_config",
+            return_value={"env_added": [], "config_added": ["new.option"]},
+        ):
+            mock_run.side_effect = _make_run_side_effect(
+                branch="main", verify_ok=True, commit_count="1"
+            )
+
+            cmd_update(mock_args)
+
+            mock_input.assert_not_called()
+            mock_gw_prompt.assert_not_called()
+            from hermes_cli.config import migrate_config
+
+            migrate_config.assert_called_once_with(interactive=False, quiet=False)
+            captured = capsys.readouterr()
+            assert "applying safe config migrations" in captured.out
+
 
 class TestCmdUpdateProfileSkillSync:
     """cmd_update syncs bundled skills to all profiles, including the active one.

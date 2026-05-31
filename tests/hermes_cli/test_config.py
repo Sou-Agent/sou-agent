@@ -530,6 +530,53 @@ class TestConfigMigrationSecretPrompts:
         assert results["env_added"] == ["TEST_API_KEY"]
 
 
+class TestTimezoneMigration:
+    """Test that config version 4→5 correctly migrates HERMES_TIMEZONE."""
+
+    def test_migrates_hermes_timezone_env_var(self, tmp_path):
+        """HERMES_TIMEZONE is copied to config.yaml when upgrading to v5."""
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump({"_config_version": 4}))
+        with patch.dict(
+            os.environ,
+            {"HERMES_HOME": str(tmp_path), "HERMES_TIMEZONE": "America/New_York"},
+        ):
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load(config_path.read_text())
+        assert raw["timezone"] == "America/New_York"
+
+    def test_sets_empty_timezone_when_env_not_set(self, tmp_path):
+        """timezone defaults to '' when HERMES_TIMEZONE is absent."""
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump({"_config_version": 4}))
+        env = {k: v for k, v in os.environ.items() if k != "HERMES_TIMEZONE"}
+        env["HERMES_HOME"] = str(tmp_path)
+        with patch.dict(os.environ, env, clear=True):
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load(config_path.read_text())
+        assert raw["timezone"] == ""
+
+    def test_skips_when_timezone_already_set(self, tmp_path):
+        """Existing timezone value is preserved on re-run."""
+        import yaml
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump({"_config_version": 4, "timezone": "Europe/Berlin"})
+        )
+        with patch.dict(
+            os.environ,
+            {"HERMES_HOME": str(tmp_path), "HERMES_TIMEZONE": "America/New_York"},
+        ):
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load(config_path.read_text())
+        assert raw["timezone"] == "Europe/Berlin"
+
+
 class TestAnthropicTokenMigration:
     """Test that config version 8→9 clears ANTHROPIC_TOKEN."""
 

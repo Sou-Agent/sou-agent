@@ -9464,15 +9464,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     "  ℹ --yes: auto-applying config migration (skipping API-key prompts)."
                 )
                 response = "y"
-            elif gateway_mode:
-                response = (
-                    _gateway_prompt(
-                        "Would you like to configure new options now? [Y/n]", "n"
-                    )
-                    .strip()
-                    .lower()
-                )
-            elif not (sys.stdin.isatty() and sys.stdout.isatty()):
+            elif gateway_mode or not (sys.stdin.isatty() and sys.stdout.isatty()):
                 print("  ℹ Non-interactive session — applying safe config migrations.")
                 response = "auto"
             else:

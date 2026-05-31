@@ -4010,7 +4010,7 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
     
     # ── Version 4 → 5: add timezone field ──
     if current_ver < 5:
-        config = load_config()
+        config = read_raw_config()  # must not merge defaults — timezone exists in DEFAULT_CONFIG
         if "timezone" not in config:
             old_tz = os.getenv("HERMES_TIMEZONE", "")
             if old_tz and old_tz.strip():
