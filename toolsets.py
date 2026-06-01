@@ -70,6 +70,16 @@ _HERMES_CORE_TOOLS = [
     "kanban_unblock",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
+    # Intents & self-directed goal management
+    "intents",
+    # Outreach
+    "send_into_session",
+    # Autonomy-layer tools
+    "world_model", "values",
+    # Research queue & social cognition
+    "research_queue", "social_model",
+    # Session creation
+    "create_session_in",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,
@@ -305,20 +315,20 @@ TOOLSETS = {
     },
 
     "intents": {
-        "description": "Create, list, and resolve deferred intentions",
-        "tools": ["intents"],
+        "description": "Create, list, and resolve deferred intentions; research queue",
+        "tools": ["intents", "research_queue"],
         "includes": [],
     },
 
     "outreach": {
-        "description": "Inject messages into an existing gateway session",
-        "tools": ["send_into_session"],
+        "description": "Inject messages into gateway sessions; social cognition",
+        "tools": ["send_into_session", "social_model", "create_session_in"],
         "includes": [],
     },
 
     "autonomy": {
-        "description": "Manually inspect and trigger the autonomy cycle",
-        "tools": ["manually_trigger_autonomy"],
+        "description": "Manually inspect and trigger the autonomy cycle; world model; values",
+        "tools": ["manually_trigger_autonomy", "world_model", "values"],
         "includes": [],
     },
 

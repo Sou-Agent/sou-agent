@@ -25,6 +25,15 @@ from autonomy import intents as intent_store
 from autonomy import response_log
 from autonomy import watchlists
 from autonomy.config import get_autonomy_config, get_autonomy_state_dir, get_journal_path
+from autonomy import motivational_state as mot_state
+from autonomy import narrative_identity
+from autonomy import values as values_store
+from autonomy import offline_processing
+from autonomy import prospection as prospection_mod
+from autonomy import social_cognition
+from autonomy import metacognition
+from autonomy import world_model as wm_store
+from autonomy import research_queue as rq_store
 
 logger = logging.getLogger(__name__)
 
@@ -365,6 +374,48 @@ def _collect_ambient_curiosity(
 
 
 # ---------------------------------------------------------------------------
+# New sub-collectors — each wrapped in try/except, returns [] on failure
+# ---------------------------------------------------------------------------
+
+def _collect_drives(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    threshold = float((config or {}).get("drive_wake_threshold", 0.5))
+    return mot_state.get_active_drives(threshold=threshold)
+
+
+def _collect_narrative(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    return narrative_identity.collect_narrative_signals(config)
+
+
+def _collect_values(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    return values_store.collect_values_signals(config)
+
+
+def _collect_offline(config: Optional[Dict[str, Any]] = None,
+                     has_other_signals: bool = False) -> List[Dict[str, Any]]:
+    return offline_processing.collect_offline_signal(config, has_other_signals=has_other_signals)
+
+
+def _collect_prospection(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    return prospection_mod.collect_prospection_signal(config)
+
+
+def _collect_social(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    return social_cognition.collect_social_signals(config)
+
+
+def _collect_metacognitive(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    return metacognition.collect_metacognitive_signals(config)
+
+
+def _collect_world_model(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    return wm_store.collect_world_model_signals(config)
+
+
+def _collect_research(config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    return rq_store.collect_research_signals(config)
+
+
+# ---------------------------------------------------------------------------
 # Top-level collection
 # ---------------------------------------------------------------------------
 
@@ -408,22 +459,76 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
     # --- Intents (highest priority) ---
     triggered_intents: List[Dict[str, Any]] = []
+    # Collect completed UUIDs for depends_on checking.
     try:
-        for intent in intent_store.list_intents(status="pending"):
+        completed_ids = {i.get("id") for i in intent_store.list_intents(status="completed")}
+    except Exception:
+        completed_ids = set()
+    try:
+        statuses_to_check = ("pending", "triggered", "waiting")
+        all_active = []
+        for st in statuses_to_check:
+            all_active.extend(intent_store.list_intents(status=st))
+
+        for intent in all_active:
+            intent_id = intent.get("id")
             cond = intent.get("condition")
-            verdict = _eval_condition(cond, now, people_by_key, discord["unread_by_name"], journal_mtime) if cond else None
-            # Trigger when: no condition (always relevant to aux), or condition true.
-            if cond and verdict is False:
+            status = intent.get("status", "pending")
+
+            # Skip snoozed intents until their snooze period expires.
+            snoozed_until_str = intent.get("snoozed_until")
+            if snoozed_until_str:
+                snoozed_until = _parse_iso(snoozed_until_str)
+                if snoozed_until and now < snoozed_until:
+                    continue
+
+            # Skip intents whose dependencies are not yet completed.
+            depends_on = intent.get("depends_on") or []
+            if depends_on and not all(dep in completed_ids for dep in depends_on):
                 continue
+
+            # For waiting intents, only surface if condition now evaluates True.
+            if status == "waiting":
+                if not cond:
+                    continue
+                verdict = _eval_condition(cond, now, people_by_key, discord["unread_by_name"], journal_mtime)
+                if verdict is not True:
+                    continue
+                # Unblock the intent — transition it back to pending.
+                try:
+                    intent_store.set_status(intent_id, "pending")
+                    intent = dict(intent)
+                    intent["status"] = "pending"
+                except Exception:
+                    logger.debug("collector: failed to unblock waiting intent %s", intent_id)
+            else:
+                verdict = _eval_condition(cond, now, people_by_key, discord["unread_by_name"], journal_mtime) if cond else None
+                # Trigger when: no condition (always relevant to aux), or condition true.
+                if cond and verdict is False:
+                    continue
+
+            surface_count = intent.get("surface_count", 0)
             triggered_intents.append({
-                "id": intent.get("id"),
+                "id": intent_id,
                 "description": intent.get("description"),
                 "origin": intent.get("origin", "free"),
                 "source_signal_id": intent.get("source_signal_id"),
                 "priority": intent.get("priority", "normal"),
                 "condition": cond,
                 "condition_evaluated": verdict,  # True / None(=fuzzy, defer)
+                "affect": intent.get("affect"),
+                "energy_cost": intent.get("energy_cost"),
+                "surface_count": surface_count,
+                "narrative_aligned": intent.get("narrative_aligned"),
+                "progress": intent.get("progress"),
+                "tags": intent.get("tags"),
             })
+            # Increment surface_count so the aux model can see escalation.
+            if intent_id:
+                try:
+                    intent_store._update_fields(intent_id, {"surface_count": surface_count + 1})
+                except Exception:
+                    logger.debug("collector: failed to increment surface_count for %s", intent_id)
     except Exception:
         logger.exception("collector: intent collection failed")
 
@@ -455,18 +560,82 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         logger.exception("collector: journal delta collection failed")
         journal_delta = []
 
-    # --- Ambient curiosity (free-form check-in) ---
-    has_other_signals = bool(
+    # --- Core other signals before deciding offline ---
+    has_core_signals = bool(
         triggered_intents or held_signals or discord["signals"]
         or contact_signals or curiosity_signals
     )
+
+    # --- Ambient curiosity (free-form check-in) ---
     try:
         ambient_signals = _collect_ambient_curiosity(
-            now, last_session_at, last_cycle_at, has_other_signals
+            now, last_session_at, last_cycle_at, has_core_signals
         )
     except Exception:
         logger.exception("collector: ambient curiosity collection failed")
         ambient_signals = []
+
+    # --- New autonomy signal sources ---
+    try:
+        drive_signals = _collect_drives(config)
+    except Exception:
+        logger.exception("collector: drive signal collection failed")
+        drive_signals = []
+
+    try:
+        narrative_signals = _collect_narrative(config)
+    except Exception:
+        logger.exception("collector: narrative signal collection failed")
+        narrative_signals = []
+
+    try:
+        values_signals = _collect_values(config)
+    except Exception:
+        logger.exception("collector: values signal collection failed")
+        values_signals = []
+
+    try:
+        social_signals = _collect_social(config)
+    except Exception:
+        logger.exception("collector: social signal collection failed")
+        social_signals = []
+
+    try:
+        world_model_signals = _collect_world_model(config)
+    except Exception:
+        logger.exception("collector: world model signal collection failed")
+        world_model_signals = []
+
+    try:
+        research_signals = _collect_research(config)
+    except Exception:
+        logger.exception("collector: research signal collection failed")
+        research_signals = []
+
+    try:
+        prospection_signals = _collect_prospection(config)
+    except Exception:
+        logger.exception("collector: prospection signal collection failed")
+        prospection_signals = []
+
+    try:
+        metacognitive_signals = _collect_metacognitive(config)
+    except Exception:
+        logger.exception("collector: metacognitive signal collection failed")
+        metacognitive_signals = []
+
+    # --- Offline (only when truly nothing else is happening) ---
+    has_other_signals = bool(
+        has_core_signals or ambient_signals or drive_signals
+        or social_signals or world_model_signals or research_signals
+        or narrative_signals or values_signals or prospection_signals
+        or metacognitive_signals
+    )
+    try:
+        offline_signals = _collect_offline(config, has_other_signals=has_other_signals)
+    except Exception:
+        logger.exception("collector: offline signal collection failed")
+        offline_signals = []
 
     snapshot.update({
         "triggered_intents": triggered_intents,
@@ -477,6 +646,15 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "curiosity_signals": curiosity_signals,
         "ambient_signals": ambient_signals,
         "journal_delta": journal_delta,
+        "drive_signals": drive_signals,
+        "narrative_signals": narrative_signals,
+        "values_signals": values_signals,
+        "social_signals": social_signals,
+        "world_model_signals": world_model_signals,
+        "research_signals": research_signals,
+        "prospection_signals": prospection_signals,
+        "metacognitive_signals": metacognitive_signals,
+        "offline_signals": offline_signals,
         # internal — used by runner to persist watermarks after a cycle
         "_new_watermarks": discord["new_watermarks"],
     })
@@ -484,6 +662,9 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     snapshot["has_signals"] = bool(
         triggered_intents or held_signals or discord["signals"]
         or contact_signals or curiosity_signals or ambient_signals
+        or drive_signals or social_signals or world_model_signals
+        or research_signals or narrative_signals or values_signals
+        or prospection_signals or metacognitive_signals or offline_signals
     )
     return snapshot
 
