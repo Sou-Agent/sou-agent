@@ -431,10 +431,17 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     watermarks = dict(cycle_state.get("channel_watermarks", {}))
     handled_ids = response_log.get_handled_ids()
 
+    tz_name = _timezone_name()
+    # Human-readable local time avoids LLM confusion over ISO offset notation.
+    # "%Z" gives the abbreviation (e.g. "AWST"); fall back to the IANA name.
+    tz_abbr = now.strftime("%Z") or tz_name
+    current_time_local = now.strftime(f"%A, %B %d, %Y at %H:%M {tz_abbr}")
+
     snapshot: Dict[str, Any] = {
         "collected_at": now.isoformat(timespec="seconds"),
         "current_datetime": now.isoformat(timespec="seconds"),
-        "timezone": _timezone_name(),
+        "current_time_local": current_time_local,
+        "timezone": tz_name,
         "time_since_last_session": _humanize_gap(now - last_session_at) if last_session_at else "never",
     }
 

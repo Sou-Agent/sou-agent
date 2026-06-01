@@ -331,8 +331,12 @@ def _get_state_header(snapshot: Dict[str, Any]) -> str:
 def build_aux_prompt(snapshot: Dict[str, Any]) -> str:
     """Assemble the compact triage prompt from the snapshot."""
     state_header = _get_state_header(snapshot)
+    # Use the human-readable local time string to avoid LLM confusion over ISO
+    # offset notation (e.g. treating an already-local "+08:00" timestamp as UTC
+    # and adding 8 hours a second time).
+    _local_time = snapshot.get("current_time_local") or snapshot.get("current_datetime", "")
     time_header = (
-        f"Current time: {snapshot.get('current_datetime')} ({snapshot.get('timezone')})\n"
+        f"Current local time: {_local_time}\n"
         f"Time since last full session: {snapshot.get('time_since_last_session')}"
     )
     header = "\n\n".join(b for b in [state_header, time_header] if b)
