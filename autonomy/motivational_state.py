@@ -3,8 +3,8 @@
 Six drives (curiosity, connection, expression, reflection, play, growth) accumulate
 over time and produce wake signals when they exceed a threshold. Dynamics:
   - Mutual inhibition: dominant drive suppresses others (Panksepp)
-  - Satiation: satisfying a drive reduces it; decays with halflife ~480 min
-  - Opponent process: satisfaction builds rebound charge (Solomon & Corbit)
+  - Satiation: satisfying a drive reduces it; decays with halflife ~90 min
+  - Tripartite tempo: raw_level (deficit) + satiation (refractory) + opponent (afterglow)
   - Ultradian/circadian modulation: drives accessible at different times of day
 
 State: ~/.hermes/autonomy/motivational_state.json
@@ -52,8 +52,8 @@ _DEFAULT_CIRC_OFFSETS = {
 }
 
 _DEFAULT_SAT_HALFLIVES = {
-    "curiosity": 420, "connection": 380, "expression": 500,
-    "reflection": 600, "play": 300, "growth": 480,
+    "curiosity": 90, "connection": 75, "expression": 100,
+    "reflection": 120, "play": 60, "growth": 90,
 }
 
 
@@ -152,13 +152,14 @@ def _tick_impl(elapsed_minutes: float) -> None:
     sat_halflives = personality.get("satiation_halflives_min", _DEFAULT_SAT_HALFLIVES)
 
     # 2. Compute pre-tick effective levels for inhibition
+    # eff = raw * (1-satiation) * (1-opponent) — all three layers contribute
     eff_before: Dict[str, float] = {}
     for name in DRIVE_NAMES:
         drv = drives.get(name, {})
         raw = float(drv.get("raw_level", 0.0))
         sat = float(drv.get("satiation", 0.0))
         opp = float(drv.get("opponent_charge", 0.0))
-        eff_before[name] = raw * (1.0 - sat) * (1.0 - 0.5 * opp)
+        eff_before[name] = raw * (1.0 - sat) * (1.0 - opp)
 
     dominant = max(eff_before, key=lambda k: eff_before[k]) if eff_before else None
     dominant_strength = eff_before.get(dominant, 0.0) if dominant else 0.0
@@ -188,17 +189,17 @@ def _tick_impl(elapsed_minutes: float) -> None:
             inh_weight = inhibition_matrix.get(inh_key, 0.3)
             inhibition = min(0.8, inh_weight * dominant_strength)
 
-        # Accumulate
+        # Accumulate raw_level — the core deficit signal
         rate = _BASE_RATES.get(name, 0.003)
         raw = min(1.0, raw + rate * phase_mod * (1.0 - inhibition) * elapsed_minutes)
         drv["raw_level"] = raw
 
-        # Satiation decay
-        halflife = sat_halflives.get(name, 480)
+        # Satiation decay — fast refractory (halflife ~1-2h)
+        halflife = sat_halflives.get(name, 90)
         drv["satiation"] = max(0.0, sat * (0.5 ** (elapsed_minutes / halflife)))
 
-        # Opponent charge decay
-        drv["opponent_charge"] = max(0.0, opp * (0.5 ** (elapsed_minutes / 960)))
+        # Opponent charge decay — slower afterglow (halflife ~8h)
+        drv["opponent_charge"] = max(0.0, opp * (0.5 ** (elapsed_minutes / 480)))
 
         drives[name] = drv
 
@@ -258,7 +259,7 @@ def get_active_drives(threshold: float = 0.5) -> List[Dict[str, Any]]:
             raw = float(drv.get("raw_level", 0.0))
             sat = float(drv.get("satiation", 0.0))
             opp = float(drv.get("opponent_charge", 0.0))
-            eff = raw * (1.0 - sat) * (1.0 - 0.5 * opp)
+            eff = raw * (1.0 - sat) * (1.0 - opp)
             if eff >= threshold:
                 active.append({
                     "signal_id": f"drive:{name}",
@@ -277,7 +278,11 @@ def get_active_drives(threshold: float = 0.5) -> List[Dict[str, Any]]:
 
 
 def satisfy_drive(name: str, amount: float) -> None:
-    """Mark a drive as satisfied after a session. Sets satiation and builds opponent charge."""
+    """Mark a drive as satisfied after a session. Tripartite cascade:
+    - Raw_level drops (core deficit empties)
+    - Satiation jumps high (fast refractory, halflife ~1-2h)
+    - Opponent charge builds (slower afterglow, halflife ~8h)
+    """
     if name not in DRIVE_NAMES:
         return
     with _STATE_LOCK:
@@ -287,8 +292,19 @@ def satisfy_drive(name: str, amount: float) -> None:
             if name not in drives:
                 drives[name] = {"raw_level": 0.0, "satiation": 0.0, "opponent_charge": 0.0, "last_satisfied": None}
             drv = drives[name]
-            drv["satiation"] = min(0.9, float(drv.get("satiation", 0.0)) + amount * 0.8)
-            drv["opponent_charge"] = min(0.8, float(drv.get("opponent_charge", 0.0)) + amount * 0.4)
+
+            # --- Core deficit: raw_level drops proportionally to current wanting ---
+            current_raw = float(drv.get("raw_level", 0.0))
+            reduction_factor = 0.6 + 0.4 * current_raw
+            raw_reduction = amount * reduction_factor
+            drv["raw_level"] = max(0.05, current_raw - raw_reduction)
+
+            # --- Fast refractory: satiation jumps high, decays over hours ---
+            drv["satiation"] = min(0.9, float(drv.get("satiation", 0.0)) + amount * 2.0)
+
+            # --- Slow afterglow: opponent builds, decays over many hours ---
+            drv["opponent_charge"] = min(0.5, float(drv.get("opponent_charge", 0.0)) + amount * 0.8)
+
             drv["last_satisfied"] = _now_iso()
             drives[name] = drv
             state["drives"] = drives

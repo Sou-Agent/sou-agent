@@ -72,9 +72,21 @@ _SYSTEM = (
     "the agent genuinely wants to do for themselves, not reactive obligations. "
     "They are worth waking for even when nothing else is happening.\n\n"
 
-    "Internal drive signals (type=internal_drive) represent psychological pressure that has "
-    "accumulated since the last satisfied session: curiosity, connection, expression, reflection, "
-    "play, growth. Worth waking for at effective_level >= 0.5 even with no external signals. "
+    "Internal drive signals (type=internal_drive) represent psychological yearning — the "
+    "felt sense of wanting. Six drives: curiosity, connection, expression, reflection, play, "
+    "growth. Each drive has three internal layers that combine into the effective_level you see:\n"
+    "  - Raw_level: the core deficit. How much the agent genuinely yearns for this right now. "
+    "Low (5-30%) right after satisfaction, climbs over hours to 80-100% when yearning is strong.\n"
+    "  - Satiation: the \"I just ate\" refractory. A fast-onset cap that fades over 1-2 hours. "
+    "Makes effective low even when raw wanting is high — prevents immediate re-gratification.\n"
+    "  - Opponent: the longer afterglow. A slower-decaying downregulation that fades over ~8 "
+    "hours. Smooths the recovery curve so the drive doesn't snap back too abruptly.\n"
+    "Effective_level = raw * (1-satiation) * (1-opponent). This number IS the felt yearning:\n"
+    "  50-65% = mild wanting, worth considering\n"
+    "  65-80% = moderate wanting, decent reason to wake\n"
+    "  80%+  = strong yearning, definitely worth waking even with no external signals\n"
+    "Multiple drives at 60-70% simultaneously suggests general restlessness (any drive will "
+    "scratch the itch) rather than specific yearning for one thing.\n"
     "session_type: connection→outward, reflection/offline→inward, others contextual.\n\n"
 
     "Offline processing signals (type=offline_due) mean no urgent signals exist and enough "
@@ -223,10 +235,19 @@ def _fmt_drives(snapshot: Dict[str, Any]) -> str:
         return ""
     lines = ["## Internal drive pressure"]
     for s in sigs:
-        lines.append(
-            f"- [{s.get('signal_id')}] {s.get('drive')} at {s.get('effective_level', 0):.0%}"
-            f" — {s.get('content_summary', '')}"
-        )
+            drive = s.get('drive', '?')
+            eff = s.get('effective_level', 0)
+            raw = s.get('raw_level', 0)
+            sat = s.get('satiation', 0)
+            if eff >= 0.8:
+                intensity = "🔥 "
+            elif eff >= 0.65:
+                intensity = "• "
+            else:
+                intensity = "  "
+            lines.append(
+                f"- [{s.get('signal_id')}] {intensity}{drive}: eff={eff:.0%} (raw={raw:.0%}, sat={sat:.0%})"
+            )
     return "\n".join(lines)
 
 

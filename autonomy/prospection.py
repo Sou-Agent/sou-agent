@@ -20,7 +20,7 @@ _DEFAULT_INTERVAL_DAYS = 30
 
 
 def _prospection_dir() -> Path:
-    return get_journal_path() / "self" / "prospection"
+    return get_journal_path() / "prospection"
 
 
 def _now() -> datetime:
