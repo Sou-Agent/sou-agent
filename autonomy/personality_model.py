@@ -39,8 +39,8 @@ _NEUTRAL_PRIORS: Dict[str, Any] = {
         "growth→reflection": 0.1, "growth→play": 0.3,
     },
     "satiation_halflives_min": {
-        "curiosity": 420, "connection": 380, "expression": 500,
-        "reflection": 600, "play": 300, "growth": 480,
+        "curiosity": 90, "connection": 75, "expression": 100,
+        "reflection": 120, "play": 60, "growth": 90,
     },
     "circadian_phase_offsets_rad": {
         "curiosity": -0.52, "connection": 1.05, "expression": 0.0,
