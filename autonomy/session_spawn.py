@@ -664,6 +664,74 @@ def _link_holds(decision: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+# Drive satisfaction for completed sessions
+# ---------------------------------------------------------------------------
+
+_SESSION_TYPE_DRIVE_MAP = {
+    "outward": {"connection": 0.5, "expression": 0.35},
+    "inward": {"reflection": 0.5, "curiosity": 0.2, "growth": 0.2},
+}
+
+_DRIVE_SIGNAL_MAP = {
+    "drive:curiosity": "curiosity",
+    "drive:connection": "connection",
+    "drive:expression": "expression",
+    "drive:reflection": "reflection",
+    "drive:play": "play",
+    "drive:growth": "growth",
+}
+
+_SIGNAL_TYPE_DRIVE_MAP = {
+    "discord": "connection",
+    "social_outreach": "connection",
+    "narrative_stale": "reflection",
+    "values_stale": "reflection",
+    "world_model_stale": "curiosity",
+    "research_due": "curiosity",
+    "offline_due": "reflection",
+    "prospection_due": "growth",
+    "metacognitive": "growth",
+    "internal_drive": None,
+}
+
+
+def _satisfy_drives_for_session(decision: Dict[str, Any],
+                                 final_response: str) -> None:
+    """Reduce drives after a completed session."""
+    from autonomy.motivational_state import satisfy_drive
+
+    session_type = decision.get("session_type", "inward")
+    signals = decision.get("signals", []) or []
+
+    base_map = _SESSION_TYPE_DRIVE_MAP.get(session_type, {"reflection": 0.3})
+    satisfied: Dict[str, float] = dict(base_map)
+
+    for sig in signals:
+        sig_id = str(sig.get("signal_id", "") or "")
+        sig_type = str(sig.get("type", "") or "")
+
+        if sig_id in _DRIVE_SIGNAL_MAP:
+            drive = _DRIVE_SIGNAL_MAP[sig_id]
+            satisfied[drive] = max(satisfied.get(drive, 0.0), 0.4)
+
+        implied = _SIGNAL_TYPE_DRIVE_MAP.get(sig_type)
+        if implied:
+            satisfied[implied] = max(satisfied.get(implied, 0.0), 0.3)
+
+    response_length = len(final_response.strip())
+    scale = max(0.3, min(1.2, response_length / 500.0))
+    if response_length < 20:
+        scale *= 0.5
+
+    for drive_name, amount in satisfied.items():
+        satisfy_drive(drive_name, amount * scale)
+
+    logger.debug(
+        "autonomy: satisfied drives for %s session: %s (scale=%.2f)",
+        session_type, satisfied, scale)
+
+
+# ---------------------------------------------------------------------------
 
 def spawn_autonomy_session(decision: Dict[str, Any], config: Optional[Dict[str, Any]] = None,
                             snapshot: Optional[Dict[str, Any]] = None,
@@ -739,6 +807,12 @@ def spawn_autonomy_session(decision: Dict[str, Any], config: Optional[Dict[str, 
     _record_session(estimated_tokens, session_id)
 
     logger.info("autonomy: session %s complete (~%d tokens)", session_id, estimated_tokens)
+
+    # Satisfy drives based on session type and triggered signals
+    try:
+        _satisfy_drives_for_session(decision, final_response)
+    except Exception:
+        logger.exception("autonomy: drive satisfaction failed for session %s", session_id)
 
     # Training data: capture autonomy session transcript
     try:
