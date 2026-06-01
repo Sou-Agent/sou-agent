@@ -70,7 +70,40 @@ _SYSTEM = (
     "Intents and held signals take priority over fresh environmental signals.\n"
     "Pay special attention to intents with ``origin=myself`` — these are things "
     "the agent genuinely wants to do for themselves, not reactive obligations. "
-    "They are worth waking for even when nothing else is happening.\n"
+    "They are worth waking for even when nothing else is happening.\n\n"
+
+    "Internal drive signals (type=internal_drive) represent psychological pressure that has "
+    "accumulated since the last satisfied session: curiosity, connection, expression, reflection, "
+    "play, growth. Worth waking for at effective_level >= 0.5 even with no external signals. "
+    "session_type: connection→outward, reflection/offline→inward, others contextual.\n\n"
+
+    "Offline processing signals (type=offline_due) mean no urgent signals exist and enough "
+    "quiet time has passed. Always wake inward. Do NOT assign a task — this is unstructured rest.\n\n"
+
+    "World model stale signals (type=world_model_stale) mean the agent declared she's tracking "
+    "something and hasn't revisited it. For topics/questions→inward research; for people→outward.\n\n"
+
+    "Social outreach signals (type=social_outreach) carry pending_topics and relationship context. "
+    "Use the pending topics — this is purposeful outreach, not a check-in.\n\n"
+
+    "Narrative/values stale signals (type=narrative_stale, values_stale) trigger inward identity "
+    "maintenance sessions.\n\n"
+
+    "Prospection signals (type=prospection_due) trigger imagination sessions — not planning. "
+    "Always inward.\n\n"
+
+    "Research queued signals (type=research_queued) trigger focused research sessions. Inward.\n\n"
+
+    "Metacognitive signals (type=metacognitive) mean a domain is failing — wake inward to reflect "
+    "on strategy before acting again.\n\n"
+
+    "Intent field notes:\n"
+    "- affect: emotional texture (seeking/care/play/grief/anxious/obligated/excited/curious)\n"
+    "- surface_count >= 3: intent has been deferred repeatedly — warrants action or dismissal\n"
+    "- energy_cost=high: avoid stacking multiple high-cost intents in one session\n"
+    "- narrative_aligned=false: a values conflict was noted but kept\n"
+    "- status=waiting: shown separately — check if unblocking condition is now met\n\n"
+
     "Free-form curiosity signals (type=ambient_curiosity) are worth waking for "
     "when the agent has had recent conversations or journal activity.\n"
     "Return JSON only. No prose."
@@ -82,17 +115,41 @@ def _fmt_intents(snapshot: Dict[str, Any]) -> str:
     if not intents:
         return ""
     lines = ["## Triggered intents [HIGHEST PRIORITY]"]
+    waiting = []
     for it in intents:
+        if it.get("status") == "waiting":
+            waiting.append(it)
+            continue
         origin = it.get("origin", "free")
         desc = it.get("description", "")
         prio = it.get("priority", "normal")
         line = f"- [{it.get('signal_id') or 'intent:' + str(it.get('id'))}] ({prio}, origin={origin}) {desc}"
         if origin in ("hold", "self_reflect") and it.get("source_signal_id"):
             line += f"  -> traces back to {it['source_signal_id']}"
+        if it.get("affect"):
+            line += f"  [affect:{it['affect']}]"
+        if it.get("energy_cost") == "high":
+            line += "  [energy:HIGH]"
+        if it.get("narrative_aligned") is False:
+            line += "  [values conflict noted]"
+        sc = int(it.get("surface_count", 0))
+        if sc >= 5:
+            line += f"  [surfaced {sc}x — you keep deferring this]"
+        elif sc >= 3:
+            line += f"  [surfaced {sc}x without action]"
+        if it.get("progress"):
+            last_prog = it["progress"][-1].get("note", "")[:60]
+            line += f"  [progress: {last_prog}]"
         lines.append(line)
-        # Normalize signal_id for the model so its decisions reference intents.
         if not it.get("signal_id") and it.get("id"):
             it["signal_id"] = f"intent:{it['id']}"
+
+    if waiting:
+        lines.append("\n## Waiting intents (check if unblocked)")
+        for it in waiting:
+            lines.append(f"- [intent:{it.get('id')}] {it.get('description', '')}  (condition: {it.get('condition', '')})")
+            if not it.get("signal_id") and it.get("id"):
+                it["signal_id"] = f"intent:{it['id']}"
     return "\n".join(lines)
 
 
@@ -160,19 +217,141 @@ def _fmt_journal(snapshot: Dict[str, Any]) -> str:
     return f"## Journal activity since last cycle\n{summary}"
 
 
+def _fmt_drives(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("drive_signals") or []
+    if not sigs:
+        return ""
+    lines = ["## Internal drive pressure"]
+    for s in sigs:
+        lines.append(
+            f"- [{s.get('signal_id')}] {s.get('drive')} at {s.get('effective_level', 0):.0%}"
+            f" — {s.get('content_summary', '')}"
+        )
+    return "\n".join(lines)
+
+
+def _fmt_social(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("social_signals") or []
+    if not sigs:
+        return ""
+    lines = ["## Social outreach due"]
+    for s in sigs:
+        pending = s.get("pending_topics") or []
+        line = f"- [{s.get('signal_id')}] {s.get('person_key')}"
+        if pending:
+            line += f" — pending: {', '.join(str(t)[:40] for t in pending[:2])}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _fmt_world_model(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("world_model_signals") or []
+    if not sigs:
+        return ""
+    lines = ["## World model — stale tracked nodes"]
+    for s in sigs:
+        lines.append(f"- [{s.get('signal_id')}] '{s.get('label')}' ({s.get('node_type')}) — {s.get('content_summary', '')}")
+    return "\n".join(lines)
+
+
+def _fmt_offline(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("offline_signals") or []
+    if not sigs:
+        return ""
+    s = sigs[0]
+    return f"## Offline rest available\n- [{s.get('signal_id')}] {s.get('content_summary', '')}"
+
+
+def _fmt_narrative(snapshot: Dict[str, Any]) -> str:
+    sigs = list((snapshot.get("narrative_signals") or []) + (snapshot.get("values_signals") or []))
+    if not sigs:
+        return ""
+    lines = ["## Identity maintenance due"]
+    for s in sigs:
+        lines.append(f"- [{s.get('signal_id')}] {s.get('content_summary', '')}")
+    return "\n".join(lines)
+
+
+def _fmt_prospection(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("prospection_signals") or []
+    if not sigs:
+        return ""
+    s = sigs[0]
+    return f"## Prospection (future imagination) due\n- [{s.get('signal_id')}] {s.get('content_summary', '')}"
+
+
+def _fmt_research(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("research_signals") or []
+    if not sigs:
+        return ""
+    lines = ["## Research queue"]
+    for s in sigs:
+        lines.append(f"- [{s.get('signal_id')}] ({s.get('priority', 'normal')}) {s.get('question', '')[:100]}")
+    return "\n".join(lines)
+
+
+def _fmt_metacognitive(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("metacognitive_signals") or []
+    if not sigs:
+        return ""
+    lines = ["## Metacognitive — strategy review needed"]
+    for s in sigs:
+        lines.append(f"- [{s.get('signal_id')}] {s.get('content_summary', '')}")
+    return "\n".join(lines)
+
+
+def _get_state_header(snapshot: Dict[str, Any]) -> str:
+    """Build a brief state header for triage context: drives + narrative summary."""
+    parts = []
+    try:
+        drives = snapshot.get("drive_signals") or []
+        if drives:
+            top = drives[:2]
+            drive_summary = ", ".join(f"{d.get('drive')} {d.get('effective_level', 0):.0%}" for d in top)
+            parts.append(f"Top drives: {drive_summary}")
+    except Exception:
+        pass
+    try:
+        from autonomy.narrative_identity import get_narrative_summary
+        summary = get_narrative_summary(max_chars=200)
+        if summary:
+            parts.append(f"Narrative: {summary}")
+    except Exception:
+        pass
+    try:
+        from autonomy.values import get_top_values_text
+        vals = get_top_values_text(n=2)
+        if vals:
+            parts.append(f"Values: {vals}")
+    except Exception:
+        pass
+    return "\n".join(parts) if parts else ""
+
+
 def build_aux_prompt(snapshot: Dict[str, Any]) -> str:
     """Assemble the compact triage prompt from the snapshot."""
-    header = (
+    state_header = _get_state_header(snapshot)
+    time_header = (
         f"Current time: {snapshot.get('current_datetime')} ({snapshot.get('timezone')})\n"
         f"Time since last full session: {snapshot.get('time_since_last_session')}"
     )
+    header = "\n\n".join(b for b in [state_header, time_header] if b)
+
     blocks = [
         header,
         _fmt_intents(snapshot),
         _fmt_held(snapshot),
+        _fmt_drives(snapshot),
         _fmt_discord(snapshot),
         _fmt_contacts(snapshot),
+        _fmt_social(snapshot),
+        _fmt_world_model(snapshot),
+        _fmt_offline(snapshot),
+        _fmt_narrative(snapshot),
+        _fmt_prospection(snapshot),
+        _fmt_research(snapshot),
         _fmt_curiosity(snapshot),
+        _fmt_metacognitive(snapshot),
         _fmt_ambient(snapshot),
         _fmt_journal(snapshot),
     ]

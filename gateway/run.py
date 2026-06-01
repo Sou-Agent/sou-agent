@@ -18688,6 +18688,7 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
     PASTE_SWEEP_EVERY = 60   # ticks — once per hour
     CURATOR_EVERY = 60       # ticks — poll hourly (inner gate handles the real cadence)
     AUTONOMY_EVERY = 1       # ticks — poll every tick (inner gate enforces aux_interval_minutes)
+    PERSONALITY_EVERY = 1440  # ticks — once per day at default 60s interval
 
     logger.info("Cron ticker started (interval=%ds)", interval)
     tick_count = 0
@@ -18766,6 +18767,24 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
                 maybe_run_autonomy_cycle()
             except Exception as e:
                 logger.debug("Autonomy tick error: %s", e)
+
+        # Personality model — refit drive parameters from trajectory data once per day.
+        # Also refreshes text embedding cache (SOUL.md, NARRATIVE.md, CURRENT_STATE.md).
+        if tick_count % PERSONALITY_EVERY == 0:
+            try:
+                from autonomy.personality_model import fit_personality
+                from pathlib import Path as _Path
+                import os as _os
+                data_dir = _Path(_os.path.expanduser("~/.hermes/training_data/motivational"))
+                if data_dir.is_dir():
+                    fit_personality(data_dir)
+            except Exception as e:
+                logger.debug("Personality model fit error: %s", e)
+            try:
+                from training.motivational_collector import refresh_text_embeddings
+                refresh_text_embeddings()
+            except Exception as e:
+                logger.debug("Text embedding refresh error: %s", e)
 
         stop_event.wait(timeout=interval)
     logger.info("Cron ticker stopped")

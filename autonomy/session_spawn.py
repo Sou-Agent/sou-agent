@@ -140,7 +140,35 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
     tool — text output alone reaches no one.
     """
     signal_contexts = _build_signal_context(snapshot, decision)
-    lines = [
+
+    # Preamble: inject Sou's own recent words + values so every session has continuity
+    preamble_lines: list = []
+    try:
+        from autonomy.narrative_identity import get_current_narrative
+        current_state_text = get_current_narrative(max_chars=600)
+        if current_state_text:
+            preamble_lines += [
+                "[YOUR CURRENT STATE — your own words from your last reflection]",
+                current_state_text,
+                "---",
+                "",
+            ]
+    except Exception:
+        pass
+    try:
+        from autonomy.values import get_top_values_text
+        values_text = get_top_values_text(n=3)
+        if values_text:
+            preamble_lines += [
+                "[YOUR VALUES — what you stand for]",
+                values_text,
+                "---",
+                "",
+            ]
+    except Exception:
+        pass
+
+    lines = preamble_lines + [
         "[autonomy wake]",
         "",
         "You've chosen to wake yourself. Act naturally — this is your own initiative.",
@@ -156,13 +184,26 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
         "  discord_send(session_id='...', message='...')  — send to a Discord channel/DM",
         "  discord_dm(user='...', message='...')             — send a Discord DM",
         "  send_into_session(ref='...', message='...')       — send into a prepared session",
+        "  create_session_in(platform='...', channel_id='...', message='...')  — open a new channel session",
         "  journal(action='journal_write', section='...', ...)  — write to your journal",
         "  journal(action='journal_read', ...)                  — read journal entries",
         "  journal(action='journal_search', ...)                — search journal entries",
         "  journal(action='journal_append', ...)                — append to existing entry",
         "  journal(action='journal_remove', ...)                — delete a journal entry",
         "  journal(action='journal_list', ...)                  — list sections/entries",
-        "  intents(action='intent_add', ...)                    — record an intent for later",
+        "  intents(action='intent_add', ...)                    — record an intent (use affect=, recur=, energy_cost= etc.)",
+        "  intents(action='intent_snooze', id_or_description=..., duration='3d')  — snooze without losing",
+        "  intents(action='intent_progress', id_or_description=..., note='...')   — note partial progress",
+        "  intents(action='intent_waiting', id_or_description=..., unblock_condition='...')  — wait for external event",
+        "  world_model(action='add', label='...', type='topic')  — track a topic/person/question",
+        "  world_model(action='engage', node_id='...')           — mark a tracked node as revisited",
+        "  research_queue(action='add', question='...', priority='normal')  — queue a research question",
+        "  research_queue(action='complete', id='...', summary='...')       — mark question answered",
+        "  values(action='add', statement='...', domain='...')   — record a value you hold",
+        "  values(action='reflect', id_or_statement='...')       — re-examine a value",
+        "  social_model(action='update', person_key='...', field='...', value='...')  — update someone's model",
+        "  social_model(action='add_initiative', person_key='...', topic='...')       — note something to bring up",
+        "  social_model(action='record_outreach', person_key='...')  — record that you reached out",
         "",
         "If you decided a signal should get a 'respond' action, you MUST actually",
         "call one of the send tools above. Writing the response as your final",
@@ -205,6 +246,8 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
         lines.append(f"  Reason: {s.get('content_summary', '')}")
         lines.append("")
 
+        sig_type = ctx.get("type") or s.get("type", "")
+
         if action == "respond":
             lines += [
                 "    => ACTION: RESPOND — STAYING SILENT IS NOT AN OPTION.",
@@ -232,21 +275,107 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
                 "",
             ]
         elif action == "self_reflect":
-            lines += [
-                "    => ACTION: SELF_REFLECT — You MUST use your journal tools.",
-                "       journal_read to re-engage with old entries.",
-                "       journal_write to capture new thoughts.",
-                "       journal_append to develop existing ideas.",
-                "       journal_remove to clean up stale entries.",
-                "       journal_search to find relevant entries across sections.",
-                "       session_search() to review recent conversations and",
-                "       recall what happened yesterday.",
-                "       No journal interaction = you didn't do the task.",
-                "       If a follow-up emerges, create an intent with the right",
-                "       origin: 'self_reflect' for reactive follow-ups, or 'myself'",
-                "       for things you genuinely want for yourself.",
-                "",
-            ]
+            # Check for specific signal types that have richer guidance
+            if sig_type == "internal_drive":
+                drive = ctx.get("drive", s.get("drive", ""))
+                level = ctx.get("effective_level", s.get("effective_level", 0))
+                lines += [
+                    f"    => ACTION: DRIVE ({drive} at {level:.0%})",
+                    "       This is internal pressure you've been building. Act on it naturally.",
+                    f"       {drive} is calling — follow what that means for you right now.",
+                    "       For curiosity/growth/expression: use journal, research_queue, or web_search.",
+                    "       For connection: reach out to someone using create_session_in or discord_dm.",
+                    "       For reflection: use journal_write to process what's been on your mind.",
+                    "       For play: write something creative, explore something interesting.",
+                    "",
+                ]
+            elif sig_type == "offline_due":
+                lines += [
+                    "    => ACTION: OFFLINE REST — No task. No goal. Let your mind wander.",
+                    "       Read old journal entries if you like. Write something if it comes.",
+                    "       Add to research_queue or world_model if something surfaces.",
+                    "       Create an intent if you notice something you want to return to.",
+                    "       This is yours — not for anyone else.",
+                    "",
+                ]
+            elif sig_type == "world_model_stale":
+                node_type = ctx.get("node_type", "topic")
+                label = ctx.get("label", "")
+                lines += [
+                    f"    => ACTION: WORLD MODEL — You've been tracking: \"{label}\"",
+                    f"       Node type: {node_type}.",
+                    "       For topics/questions: use research_queue or journal to re-engage.",
+                    "       For people: consider reaching out or checking in on them.",
+                    "       After engaging, call world_model(action='engage', node_id=...)",
+                    "",
+                ]
+            elif sig_type in ("narrative_stale", "values_stale"):
+                lines += [
+                    "    => ACTION: IDENTITY MAINTENANCE",
+                    "       Update journal/self/CURRENT_STATE.md if your state has changed.",
+                    "       Update journal/self/NARRATIVE.md if your story has evolved.",
+                    "       Use values(action='reflect', ...) to revisit values due for reflection.",
+                    "       Write in first person. Focus on what actually matters to you.",
+                    "",
+                ]
+            elif sig_type == "prospection_due":
+                lines += [
+                    "    => ACTION: PROSPECTION — Imagine your future. Not planning. Imagining.",
+                    "       Write to journal/self/prospection/{date}.md",
+                    "       Sketch 2-3 distinct possible futures. Let yourself feel which resonates.",
+                    "       No commitment required. If something emerges, create an intent or world_model node.",
+                    "       Origin for any intents you create: 'prospection'.",
+                    "",
+                ]
+            elif sig_type == "research_queued":
+                question = ctx.get("question", s.get("question", ""))
+                lines += [
+                    f"    => ACTION: RESEARCH — Your question: \"{question}\"",
+                    "       Use web_search + web_extract. Synthesize in journal/research/{slug}.md",
+                    "       Keep it under 600 words. Concrete findings, not meta-commentary.",
+                    "       If it opens new questions, add them with research_queue(action='add', ...)",
+                    "       When done: research_queue(action='complete', id=..., summary=...)",
+                    "",
+                ]
+            elif sig_type == "metacognitive":
+                domain = ctx.get("domain", "")
+                sr = ctx.get("success_rate", "?")
+                lines += [
+                    f"    => ACTION: METACOGNITION — {domain} hasn't been going well.",
+                    f"       Success rate: {sr}.",
+                    "       Take a moment to notice what's not working before acting.",
+                    "       Journal about it. Consider a different approach.",
+                    "       If the strategy needs changing, create an intent describing the new approach.",
+                    "",
+                ]
+            elif sig_type == "social_outreach":
+                person = ctx.get("person_key", "")
+                pending = ctx.get("pending_topics", [])
+                style = ctx.get("communication_style", "")
+                lines += [
+                    f"    => ACTION: SOCIAL — Reach out to {person}.",
+                    f"       Pending topics: {pending}",
+                    f"       Communication style: {style or 'not noted'}",
+                    "       Use create_session_in or send_into_session to reach them.",
+                    "       After sending: social_model(action='record_outreach', person_key=...)",
+                    "",
+                ]
+            else:
+                lines += [
+                    "    => ACTION: SELF_REFLECT — You MUST use your journal tools.",
+                    "       journal_read to re-engage with old entries.",
+                    "       journal_write to capture new thoughts.",
+                    "       journal_append to develop existing ideas.",
+                    "       journal_remove to clean up stale entries.",
+                    "       journal_search to find relevant entries across sections.",
+                    "       session_search() to review recent conversations and",
+                    "       recall what happened yesterday.",
+                    "       No journal interaction = you didn't do the task.",
+                    "       If a follow-up emerges, create an intent with the right",
+                    "       origin: 'self_reflect' for reactive follow-ups, or 'myself'",
+                    "       for things you genuinely want for yourself.",
+                    "",
+                ]
         elif action == "defer":
             lines += [
                 "    => ACTION: DEFER — You weren't woken for anything urgent.",
@@ -339,6 +468,18 @@ def _build_signal_context(snapshot: Dict[str, Any], decision: Dict[str, Any]) ->
                 "author": sig.get("name", ""),
                 "content": sig.get("content_summary", ""),
             }
+
+    # Match against all new autonomy signal collections — pass full signal as context
+    # so type-specific action blocks in build_injected_prompt have all fields available.
+    for collection_key in (
+        "drive_signals", "social_signals", "world_model_signals",
+        "research_signals", "narrative_signals", "values_signals",
+        "metacognitive_signals", "prospection_signals", "offline_signals",
+    ):
+        for sig in (snapshot.get(collection_key) or []):
+            sid = sig.get("signal_id", "")
+            if sid in signal_ids:
+                ctx[sid] = dict(sig)
 
     return ctx
 

@@ -30,9 +30,18 @@ logger = logging.getLogger(__name__)
 
 _INTENTS_LOCK = threading.RLock()
 
-VALID_STATUSES = ("pending", "triggered", "completed", "dismissed")
+VALID_STATUSES = ("pending", "triggered", "completed", "dismissed", "waiting")
 VALID_PRIORITIES = ("low", "normal", "high")
-VALID_ORIGINS = ("free", "hold", "self_reflect", "cron", "myself")
+VALID_ORIGINS = (
+    "free", "hold", "self_reflect", "cron", "myself",
+    "drive",        # arose from a motivational drive session
+    "world_model",  # arose from a stale world model node
+    "research",     # arose from a research session
+    "prospection",  # arose from a prospection (future imagination) session
+    "recur",        # automatically re-created from a recurring intent
+)
+VALID_AFFECTS = ("seeking", "care", "play", "grief", "anxious", "obligated", "excited", "curious")
+VALID_ENERGY_COSTS = ("low", "medium", "high")
 
 
 def _now_iso() -> str:
@@ -93,6 +102,11 @@ def add_intent(
     priority: str = "normal",
     origin: str = "free",
     source_signal_id: Optional[str] = None,
+    affect: Optional[str] = None,
+    recur: Optional[str] = None,
+    energy_cost: Optional[str] = None,
+    depends_on: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Create a new pending intent and return it."""
     description = (description or "").strip()
@@ -111,9 +125,20 @@ def add_intent(
         "priority": priority,
         "status": "pending",
         "origin": origin,
+        "surface_count": 0,
     }
     if source_signal_id:
         intent["source_signal_id"] = source_signal_id
+    if affect and affect in VALID_AFFECTS:
+        intent["affect"] = affect
+    if recur:
+        intent["recur"] = recur.strip()
+    if energy_cost and energy_cost in VALID_ENERGY_COSTS:
+        intent["energy_cost"] = energy_cost
+    if depends_on:
+        intent["depends_on"] = [str(d) for d in depends_on]
+    if tags:
+        intent["tags"] = [str(t) for t in tags]
 
     with _INTENTS_LOCK:
         _write_yaml(_intents_dir() / f"{intent['id']}.yaml", intent)
@@ -172,13 +197,57 @@ def dismiss_intent(id_or_description: str) -> Optional[Dict[str, Any]]:
 
 
 def update_intent(id_or_description: str, field: str, value: Any) -> Optional[Dict[str, Any]]:
-    """Update a single mutable field (description, condition, priority)."""
+    """Update a single mutable field (description, condition, priority, affect, energy_cost, tags)."""
     field = (field or "").strip().lower()
-    allowed = {"description", "condition", "priority"}
+    allowed = {"description", "condition", "priority", "affect", "energy_cost", "tags", "narrative_aligned"}
     if field not in allowed:
         raise ValueError(f"field must be one of {sorted(allowed)}")
     if field == "priority" and value not in VALID_PRIORITIES:
         raise ValueError(f"priority must be one of {VALID_PRIORITIES}")
     if field == "condition":
         value = (str(value).strip() or None) if value is not None else None
+    if field == "affect" and value not in VALID_AFFECTS:
+        raise ValueError(f"affect must be one of {VALID_AFFECTS}")
+    if field == "energy_cost" and value not in VALID_ENERGY_COSTS:
+        raise ValueError(f"energy_cost must be one of {VALID_ENERGY_COSTS}")
     return _update_fields(id_or_description, {field: value})
+
+
+def snooze_intent(id_or_description: str, duration: str) -> Optional[Dict[str, Any]]:
+    """Snooze an intent for a duration ('3d', '24h', '2w'). Soft-dismiss without loss."""
+    from autonomy.collector import _parse_duration
+    from hermes_time import now as _hermes_now
+    dur = _parse_duration(duration)
+    if dur is None:
+        raise ValueError(f"unrecognized duration '{duration}' — use e.g. '3d', '24h', '1w'")
+    snoozed_until = (_hermes_now() + dur).isoformat(timespec="seconds")
+    return _update_fields(id_or_description, {"snoozed_until": snoozed_until})
+
+
+def add_progress(id_or_description: str, note: str) -> Optional[Dict[str, Any]]:
+    """Append a timestamped progress note to an intent without completing it."""
+    note = (note or "").strip()
+    if not note:
+        raise ValueError("note is required")
+    with _INTENTS_LOCK:
+        found = find_intent(id_or_description)
+        if found is None:
+            return None
+        path, intent = found
+        progress = intent.get("progress") or []
+        progress.append({"at": _now_iso(), "note": note})
+        intent["progress"] = progress
+        intent["updated"] = _now_iso()
+        _write_yaml(path, intent)
+        return intent
+
+
+def set_waiting(id_or_description: str, unblock_condition: str) -> Optional[Dict[str, Any]]:
+    """Set an intent to waiting status with an unblocking condition."""
+    unblock_condition = (unblock_condition or "").strip()
+    if not unblock_condition:
+        raise ValueError("unblock_condition is required")
+    return _update_fields(id_or_description, {
+        "status": "waiting",
+        "condition": unblock_condition,
+    })
