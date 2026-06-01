@@ -18769,7 +18769,6 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
                 logger.debug("Autonomy tick error: %s", e)
 
         # Personality model — refit drive parameters from trajectory data once per day.
-        # Also refreshes text embedding cache (SOUL.md, NARRATIVE.md, CURRENT_STATE.md).
         if tick_count % PERSONALITY_EVERY == 0:
             try:
                 from autonomy.personality_model import fit_personality
@@ -18780,11 +18779,6 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
                     fit_personality(data_dir)
             except Exception as e:
                 logger.debug("Personality model fit error: %s", e)
-            try:
-                from training.motivational_collector import refresh_text_embeddings
-                refresh_text_embeddings()
-            except Exception as e:
-                logger.debug("Text embedding refresh error: %s", e)
 
         stop_event.wait(timeout=interval)
     logger.info("Cron ticker stopped")

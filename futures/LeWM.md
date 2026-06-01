@@ -16,13 +16,15 @@ Each training record captures a snapshot of Sou's full internal state before and
 
 **Social state** — relationship quality scores per person in her social model; count of pending outreach initiatives; intent affect distribution (how many pending intents carry each emotional texture).
 
-**Personality prose as embeddings** — three documents embedded via a small sentence embedding model (`all-MiniLM-L6-v2`) and cached between sessions: SOUL.md (static base personality, computed once), NARRATIVE.md (monthly life story, invalidated on mtime change), and CURRENT_STATE.md (weekly texture, cached 48h). These enter the JEPA encoder as 384-dimensional vectors concatenated with the structured state, so the actual prose of Sou's personality and current life chapter is part of the causal model — not just metadata.
+**Personality prose** — SOUL.md, NARRATIVE.md, and CURRENT_STATE.md will be embedded and included in the observation vector, but the specific encoding is deferred until the JEPA backbone is chosen. The right embedding model depends on the encoder architecture — a small MLP over structured state may want a different text encoder than a transformer backbone. Text embeddings are not captured in the current training records; they will be added when the backbone decision is made.
 
 Records are stored as daily JSONL in `~/.hermes/training_data/motivational/` and collected only when `training.collect_motivational_data: true` in config.
 
 ## How the JEPA is adapted
 
-Standard JEPA encodes image patches; this variant replaces the ViT encoder with an MLP over the structured state vector plus the concatenated text embeddings. The two-loss objective is preserved: MSE on predicted next-embedding, plus KL regularizer enforcing a Gaussian latent distribution. No reconstruction loss — the model learns to predict future internal states in latent space, not to reconstruct the input. This is computationally cheap: forward pass runs on CPU in milliseconds with a small latent dimension (128).
+Standard JEPA encodes image patches; this variant replaces the ViT encoder with an MLP over the structured state vector. The two-loss objective is preserved: MSE on predicted next-embedding, plus KL regularizer enforcing a Gaussian latent distribution. No reconstruction loss — the model learns to predict future internal states in latent space, not to reconstruct the input. This is computationally cheap: forward pass runs on CPU in milliseconds with a small latent dimension (128).
+
+Text embeddings of Sou's personality documents (SOUL.md, NARRATIVE.md, CURRENT_STATE.md) will be concatenated to the encoder input, but the specific embedding model is deferred until the backbone is chosen. They are not captured in current training records — adding them later is straightforward once the architecture decision is made.
 
 The Gaussian regularization matters because it makes the latent space interpretable and useful beyond prediction. The mean of the learned Gaussian becomes Sou's "baseline self" — her typical psychological configuration across all collected sessions. Variance per dimension captures stability: low variance on a dimension means that aspect of her inner world is stable across sessions (likely core identity); high variance means it fluctuates (likely transient mood).
 

@@ -102,17 +102,6 @@ def _build_observation(motivational_state: Optional[Dict[str, Any]] = None,
     except Exception:
         identity["domain_confidence"] = {}
 
-    # --- Text embeddings (cached, computed by daily tick) ---
-    try:
-        emb_cache = _load_embedding_cache()
-        if emb_cache:
-            identity["text_embeddings"] = {
-                k: v for k, v in emb_cache.items()
-                if k in ("soul_embedding", "narrative_embedding", "current_state_embedding")
-            }
-    except Exception:
-        pass
-
     obs["identity"] = identity
 
     # --- Social state ---
@@ -148,19 +137,6 @@ def _build_observation(motivational_state: Optional[Dict[str, Any]] = None,
     now_iso = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
     obs["captured_at"] = now_iso
     return obs
-
-
-def _load_embedding_cache() -> Dict[str, Any]:
-    from hermes_constants import get_hermes_home
-    cache_path = get_hermes_home() / "autonomy" / "text_embedding_cache.json"
-    try:
-        if cache_path.exists():
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
 
 
 def capture_pre_session(
@@ -306,45 +282,3 @@ def get_trajectory(date: Optional[str] = None) -> List[Dict[str, Any]]:
     return records
 
 
-def refresh_text_embeddings(config: Optional[Dict[str, Any]] = None) -> None:
-    """Recompute and cache text embeddings for SOUL.md, NARRATIVE.md, CURRENT_STATE.md.
-
-    Called by the daily background tick. Requires sentence-transformers; silently
-    skips if not installed. Only runs when data collection is enabled.
-    """
-    if not is_motivational_collection_enabled(config):
-        return
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError:
-        return
-
-    try:
-        from autonomy.config import get_journal_path
-        from hermes_constants import get_hermes_home
-        from autonomy.narrative_identity import get_current_narrative, get_narrative_summary
-
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        cache: Dict[str, Any] = {}
-
-        soul_path = get_hermes_home() / "SOUL.md"
-        if soul_path.exists():
-            soul_text = soul_path.read_text(encoding="utf-8")[:2000]
-            emb = model.encode(soul_text).tolist()
-            cache["soul_embedding"] = emb
-
-        narrative_text = get_narrative_summary(max_chars=2000)
-        if narrative_text:
-            cache["narrative_embedding"] = model.encode(narrative_text).tolist()
-
-        current_text = get_current_narrative(max_chars=2000)
-        if current_text:
-            cache["current_state_embedding"] = model.encode(current_text).tolist()
-
-        cache["updated"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
-        cache_path = get_hermes_home() / "autonomy" / "text_embedding_cache.json"
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(cache), encoding="utf-8")
-        logger.info("motivational_collector: text embeddings refreshed")
-    except Exception:
-        logger.debug("motivational_collector: refresh_text_embeddings failed", exc_info=True)
