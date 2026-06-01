@@ -168,10 +168,16 @@ def build_injected_prompt(snapshot: Dict[str, Any], decision: Dict[str, Any],
     except Exception:
         pass
 
+    # Use the pre-computed human-readable local time so the agent uses the correct
+    # wall-clock time in titles and content, rather than re-interpreting an ISO
+    # timestamp with an offset that can be misread as UTC needing conversion.
+    _local_time = snapshot.get("current_time_local") or snapshot.get("current_datetime", "")
+
     lines = preamble_lines + [
         "[autonomy wake]",
         "",
         "You've chosen to wake yourself. Act naturally — this is your own initiative.",
+        f"Current local time: {_local_time}",
         "",
         f"Reason: {decision.get('reason') or '(unspecified)'}",
         f"Session type: {decision.get('session_type', 'inward')} "
