@@ -109,6 +109,10 @@ _SYSTEM = (
     "Metacognitive signals (type=metacognitive) mean a domain is failing — wake inward to reflect "
     "on strategy before acting again.\n\n"
 
+    "Journal spiral signals (type=journal_spiral) mean the agent has written multiple journal "
+    "entries about the same theme within a short window — a sign of emotional cycling rather "
+    "than processing. Wake inward for reflection to help break the loop.\n\n"
+
     "Intent field notes:\n"
     "- affect: emotional texture (seeking/care/play/grief/anxious/obligated/excited/curious)\n"
     "- surface_count >= 3: intent has been deferred repeatedly — warrants action or dismissal\n"
@@ -321,6 +325,22 @@ def _fmt_metacognitive(snapshot: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _fmt_journal_spiral(snapshot: Dict[str, Any]) -> str:
+    sigs = snapshot.get("spiral_signals") or []
+    if not sigs:
+        return ""
+    lines = ["## Journal spiral detected — repetitive thematic pattern"]
+    for s in sigs:
+        theme = s.get("theme", "?")
+        entry_count = s.get("entry_count", 0)
+        time_span = s.get("time_span_hours", 0)
+        lines.append(
+            f"- [{s.get('signal_id')}] {entry_count}x '{theme}' in "
+            f"{time_span}h — wake inward for reflection"
+        )
+    return "\n".join(lines)
+
+
 def _get_state_header(snapshot: Dict[str, Any]) -> str:
     """Build a brief state header for triage context: drives + narrative summary."""
     parts = []
@@ -373,6 +393,7 @@ def build_aux_prompt(snapshot: Dict[str, Any]) -> str:
         _fmt_research(snapshot),
         _fmt_curiosity(snapshot),
         _fmt_metacognitive(snapshot),
+        _fmt_journal_spiral(snapshot),
         _fmt_ambient(snapshot),
         _fmt_journal(snapshot),
     ]
