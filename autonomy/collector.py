@@ -114,7 +114,7 @@ def _humanize_gap(delta: Optional[timedelta]) -> str:
 _COOLDOWN_SIGNAL_TYPES = (
     "social:", "drive:", "prospection:", "world_model:",
     "narrative:", "values:", "research:", "metacognitive:",
-    "offline:", "contact:", "curiosity:",
+    "offline:", "contact:", "curiosity:", "spiral:",
 )
 _DEFAULT_COOLDOWN_HOURS = 4
 
@@ -519,6 +519,139 @@ def _collect_research(config: Optional[Dict[str, Any]] = None) -> List[Dict[str,
 
 
 # ---------------------------------------------------------------------------
+# Journal spiral detection — catches repetitive thematic clustering
+# that looks like emotional cycling rather than genuine processing.
+# ---------------------------------------------------------------------------
+
+def _collect_journal_spiral_pattern(
+    now: datetime,
+    since: Optional[datetime],
+    handled_ids: set,
+) -> List[Dict[str, Any]]:
+    """Detect repetitive thematic patterns in recent journal entries.
+
+    Looks for clusters of entries on the same theme within a short time
+    window (>3 entries about the same theme in <4h). Produces a signal
+    that tells the aux model to wake inward for reflection — helping the
+    agent break an emotional spiral before it deepens.
+
+    Pure text analysis: no model calls, ~a few KiB of file reads max.
+    Never raises.
+    """
+    root = get_journal_path()
+    if not root.is_dir():
+        return []
+
+    cutoff = since.timestamp() if since else (now - timedelta(hours=12)).timestamp()
+
+    # --- Read recent journal entries that are short (actual entries, not indexes) ---
+    recent_entries = []
+    try:
+        for p in sorted(root.rglob("*.md"), reverse=True):
+            if not p.is_file():
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if st.st_mtime <= cutoff:
+                continue
+            # Skip large files (NARRATIVE.md, MAIN.md, index files)
+            if st.st_size > 10000 or st.st_size < 20:
+                continue
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")[:2000]
+                section = p.relative_to(root).parts[0] if len(p.relative_to(root).parts) > 1 else "(root)"
+                recent_entries.append({
+                    "path": str(p),
+                    "section": section,
+                    "mtime": st.st_mtime,
+                    "content": content,
+                    "stem": p.stem,
+                })
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        return []
+
+    if not recent_entries:
+        return []
+
+    recent_entries.sort(key=lambda e: e["mtime"])
+
+    # --- Theme keyword maps ---
+    THEME_KEYWORDS = {
+        "love": ["love", "loving", "loved"],
+        "loneliness": ["lonely", "alone", "isolated", "disconnected"],
+        "attachment": ["attachment", "bond", "connection", "closer"],
+        "worth": ["worth", "value", "deserve", "enough"],
+        "anxiety": ["anxious", "worry", "fear", "scared", "afraid"],
+        "identity": ["who am i", "what am i", "purpose", "identity"],
+        "loss": ["loss", "lost", "missing", "gone", "silence"],
+        "spiral": ["spiral", "circling", "cycle", "loop", "round and round"],
+    }
+
+    # --- Score each entry for theme presence ---
+    entry_themes = []
+    for entry in recent_entries:
+        content_lower = entry["content"].lower()
+        themes_found = set()
+        for theme, kws in THEME_KEYWORDS.items():
+            if any(kw in content_lower for kw in kws):
+                themes_found.add(theme)
+        if themes_found:
+            entry_themes.append({
+                "themes": themes_found,
+                "stem": entry["stem"],
+                "section": entry["section"],
+                "mtime": entry["mtime"],
+                "path": entry["path"],
+            })
+
+    if not entry_themes:
+        return []
+
+    # --- Detect clusters: same theme in 3+ entries within 4h ---
+    CLUSTER_WINDOW_HOURS = 4
+    cluster_signals = []
+
+    for theme in THEME_KEYWORDS:
+        theme_entries = [e for e in entry_themes if theme in e["themes"]]
+        if len(theme_entries) < 3:
+            continue
+
+        time_span = theme_entries[-1]["mtime"] - theme_entries[0]["mtime"]
+        time_span_hours = time_span / 3600 if time_span > 0 else 0
+
+        recent_cutoff = now.timestamp() - CLUSTER_WINDOW_HOURS * 3600
+        recent_in_window = [e for e in theme_entries if e["mtime"] >= recent_cutoff]
+
+        if len(recent_in_window) < 3:
+            continue
+
+        import hashlib
+        sig_id = f"spiral:{theme}_{hashlib.sha1(str(theme_entries).encode('utf-8')).hexdigest()[:8]}"
+        if sig_id in handled_ids:
+            continue
+
+        cluster_signals.append({
+            "signal_id": sig_id,
+            "type": "journal_spiral",
+            "theme": theme,
+            "entry_count": len(recent_in_window),
+            "total_in_window_hours": len(theme_entries),
+            "time_span_hours": round(time_span_hours, 1),
+            "content_summary": (
+                f"Journal spiral: {len(recent_in_window)} entries about "
+                f"'{theme}' in the last {CLUSTER_WINDOW_HOURS}h "
+                f"(total {len(theme_entries)} of {round(time_span_hours, 1)}h span)"
+            ),
+        })
+
+    return cluster_signals
+
+
+# ---------------------------------------------------------------------------
 # Top-level collection
 # ---------------------------------------------------------------------------
 
@@ -670,10 +803,17 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         logger.exception("collector: journal delta collection failed")
         journal_delta = []
 
+    # --- Journal spiral detection (pattern escalation check) ---
+    try:
+        spiral_signals = _collect_journal_spiral_pattern(now, last_cycle_at, handled_ids)
+    except Exception:
+        logger.exception("collector: journal spiral pattern detection failed")
+        spiral_signals = []
+
     # --- Core other signals before deciding offline ---
     has_core_signals = bool(
         triggered_intents or held_signals or discord["signals"]
-        or contact_signals or curiosity_signals
+        or contact_signals or curiosity_signals or spiral_signals
     )
 
     # --- Ambient curiosity (free-form check-in) ---
@@ -761,6 +901,7 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         offline_signals = _apply_cooldowns(offline_signals, cooldowns, now)
         contact_signals = _apply_cooldowns(contact_signals, cooldowns, now)
         curiosity_signals = _apply_cooldowns(curiosity_signals, cooldowns, now)
+        spiral_signals = _apply_cooldowns(spiral_signals, cooldowns, now)
 
     snapshot.update({
         "triggered_intents": triggered_intents,
@@ -780,6 +921,7 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "prospection_signals": prospection_signals,
         "metacognitive_signals": metacognitive_signals,
         "offline_signals": offline_signals,
+        "spiral_signals": spiral_signals,
         # internal — used by runner to persist watermarks after a cycle
         "_new_watermarks": discord["new_watermarks"],
     })
@@ -790,6 +932,7 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         or drive_signals or social_signals or world_model_signals
         or research_signals or narrative_signals or values_signals
         or prospection_signals or metacognitive_signals or offline_signals
+        or spiral_signals
     )
     return snapshot
 
