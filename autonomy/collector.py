@@ -104,7 +104,110 @@ def _humanize_gap(delta: Optional[timedelta]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Intent condition evaluation (structured conditions only; no model)
+# Signal cooldowns — prevent stale re-triggering of recently-handled signals
+# ---------------------------------------------------------------------------
+
+# Signal types eligible for cooldown after a session handles them.
+# Per-signal_id cooldown: if "social:bailey" was handled, "social:bailey"
+# won't fire again until the cooldown expires. Other signal_ids with
+# different keys (e.g. "social:thon") are unaffected.
+_COOLDOWN_SIGNAL_TYPES = (
+    "social:", "drive:", "prospection:", "world_model:",
+    "narrative:", "values:", "research:", "metacognitive:",
+    "offline:", "contact:", "curiosity:",
+)
+_DEFAULT_COOLDOWN_HOURS = 4
+
+
+def _is_cooldown_eligible(signal_id: str) -> bool:
+    """Return True if this signal type should be cooled down after handling."""
+    return any(signal_id.startswith(prefix) for prefix in _COOLDOWN_SIGNAL_TYPES)
+
+
+def _get_cooldowns(state: Dict[str, Any]) -> Dict[str, str]:
+    """Extract the cooldowns dict from cycle state."""
+    raw = state.get("signal_cooldowns")
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _apply_cooldowns(
+    signals: List[Dict[str, Any]],
+    cooldowns: Dict[str, str],
+    now: datetime,
+) -> List[Dict[str, Any]]:
+    """Filter out signals whose signal_id is within a cooldown window."""
+    if not cooldowns or not signals:
+        return list(signals) if signals else []
+    out = []
+    for signal in signals:
+        sid = signal.get("signal_id", "")
+        if not sid:
+            out.append(signal)
+            continue
+        expiry_str = cooldowns.get(sid)
+        if expiry_str:
+            expiry = _parse_iso(expiry_str)
+            if expiry and now < expiry:
+                logger.debug(
+                    "collector: suppressed %s (cooldown until %s)",
+                    sid, expiry.isoformat(),
+                )
+                continue
+        out.append(signal)
+    return out
+
+
+def record_signal_cooldowns(
+    signal_ids: List[str],
+    config: Optional[Dict[str, Any]] = None,
+    duration_hours: Optional[float] = None,
+) -> None:
+    """Persist cooldowns for the given signal_ids.
+
+    Only cooldown-eligible types are recorded. Once set, the same signal_id
+    won't re-trigger until the cooldown window expires.
+    """
+    if not signal_ids:
+        return
+    if duration_hours is None:
+        duration_hours = float(
+            (config or {}).get("signal_cooldown_hours", _DEFAULT_COOLDOWN_HOURS)
+        )
+    now = _now()
+    state = _load_cycle_state()
+    cooldowns = _get_cooldowns(state)
+    expiry = now + timedelta(hours=duration_hours)
+    expiry_str = expiry.isoformat(timespec="seconds")
+    any_new = False
+    for sid in signal_ids:
+        if _is_cooldown_eligible(sid):
+            cooldowns[sid] = expiry_str
+            logger.debug("collector: cooldown %s → %s", sid, expiry_str)
+            any_new = True
+    if any_new:
+        state["signal_cooldowns"] = cooldowns
+        save_cycle_state(state)
+
+
+def _prune_expired_cooldowns(state: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+    """Remove expired cooldown entries from the state dict and return it."""
+    cooldowns = _get_cooldowns(state)
+    if not cooldowns:
+        return state
+    expired = [sid for sid, es in cooldowns.items()
+               if (exp := _parse_iso(es)) and now >= exp]
+    for sid in expired:
+        del cooldowns[sid]
+        logger.debug("collector: cooldown expired for %s", sid)
+    if expired:
+        state["signal_cooldowns"] = cooldowns
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Intent condition evaluation
 # ---------------------------------------------------------------------------
 
 def _eval_condition(condition: str, now: datetime, people_by_key: Dict[str, Dict[str, Any]],
@@ -637,6 +740,21 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         logger.exception("collector: offline signal collection failed")
         offline_signals = []
 
+    # --- Apply signal cooldowns to prevent stale re-triggers ---
+    cooldowns = _get_cooldowns(cycle_state)
+    if cooldowns:
+        drive_signals = _apply_cooldowns(drive_signals, cooldowns, now)
+        social_signals = _apply_cooldowns(social_signals, cooldowns, now)
+        world_model_signals = _apply_cooldowns(world_model_signals, cooldowns, now)
+        research_signals = _apply_cooldowns(research_signals, cooldowns, now)
+        narrative_signals = _apply_cooldowns(narrative_signals, cooldowns, now)
+        values_signals = _apply_cooldowns(values_signals, cooldowns, now)
+        prospection_signals = _apply_cooldowns(prospection_signals, cooldowns, now)
+        metacognitive_signals = _apply_cooldowns(metacognitive_signals, cooldowns, now)
+        offline_signals = _apply_cooldowns(offline_signals, cooldowns, now)
+        contact_signals = _apply_cooldowns(contact_signals, cooldowns, now)
+        curiosity_signals = _apply_cooldowns(curiosity_signals, cooldowns, now)
+
     snapshot.update({
         "triggered_intents": triggered_intents,
         "held_signals": held_signals,
@@ -676,10 +794,13 @@ def commit_cycle(snapshot: Dict[str, Any], session_fired: bool = False) -> None:
     mid-cycle re-surfaces the same messages next time rather than losing them.
     """
     state = _load_cycle_state()
+    now = _now()
     state["last_cycle_at"] = snapshot.get("collected_at")
     state["channel_watermarks"] = snapshot.get("_new_watermarks", state.get("channel_watermarks", {}))
     if session_fired:
         state["last_session_at"] = snapshot.get("collected_at")
+    # Prune expired signal cooldowns so the state doesn't accumulate stale entries.
+    state = _prune_expired_cooldowns(state, now)
     save_cycle_state(state)
 
 
