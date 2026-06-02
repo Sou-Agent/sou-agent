@@ -76,6 +76,16 @@ def get_person(person_key: str) -> Optional[Dict[str, Any]]:
 def update_person(person_key: str, field: str, value: Any) -> Dict[str, Any]:
     """Update a single field in a person's model. Creates the record if absent."""
     key = person_key.lower().strip()
+    _NUMERIC_FIELDS = {"relationship_quality", "desired_outreach_interval_hours"}
+    if field in _NUMERIC_FIELDS:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Field '{field}' requires a numeric value, got {type(value).__name__}: {value!r}"
+            )
+        if field == "relationship_quality":
+            value = max(0.0, min(1.0, value))
     with _SOCIAL_LOCK:
         data = _load_models()
         people = data.setdefault("people", {})
