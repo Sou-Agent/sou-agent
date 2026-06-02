@@ -233,8 +233,14 @@ def _tick_impl(elapsed_minutes: float) -> None:
     _save_state(state)
 
 
-def get_active_drives(threshold: float = 0.5) -> List[Dict[str, Any]]:
-    """Return drive signals above the effective-level threshold. Ticks state lazily."""
+def get_active_drives(threshold: float = 0.5, cooldown_minutes: float = 15.0) -> List[Dict[str, Any]]:
+    """Return drive signals above the effective-level threshold. Ticks state lazily.
+
+    Skips drives that were recently satisfied (last_satisfied within
+    cooldown_minutes) as a safety net — prevents stale-signal re-firing
+    when between-session satisfaction was insufficient to bring eff below
+    threshold.
+    """
     try:
         state = _load_state()
         last_updated = state.get("last_updated")
@@ -253,6 +259,7 @@ def get_active_drives(threshold: float = 0.5) -> List[Dict[str, Any]]:
             state = _load_state()
 
         drives = state.get("drives") or {}
+        now = _now()
         active: List[Dict[str, Any]] = []
         for name in DRIVE_NAMES:
             drv = drives.get(name, {})
@@ -260,6 +267,23 @@ def get_active_drives(threshold: float = 0.5) -> List[Dict[str, Any]]:
             sat = float(drv.get("satiation", 0.0))
             opp = float(drv.get("opponent_charge", 0.0))
             eff = raw * (1.0 - sat) * (1.0 - opp)
+
+            # Cooldown check: if the drive was satisfied within the last
+            # cooldown_minutes, skip it even if eff is above threshold.
+            # This is a safety net for the between-session race where
+            # short-autonomy-session satisfaction was insufficient.
+            last_satisfied_str = drv.get("last_satisfied")
+            if last_satisfied_str:
+                try:
+                    last_sat_dt = datetime.fromisoformat(str(last_satisfied_str).replace("Z", "+00:00"))
+                    if last_sat_dt.tzinfo is None:
+                        last_sat_dt = last_sat_dt.replace(tzinfo=timezone.utc)
+                    mins_since = (now - last_sat_dt).total_seconds() / 60.0
+                    if mins_since < cooldown_minutes:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
             if eff >= threshold:
                 active.append({
                     "signal_id": f"drive:{name}",

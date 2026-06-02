@@ -59,7 +59,7 @@ def run_autonomy_cycle(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     Returns a small status dict for logging/testing. Never raises.
     """
     from autonomy.config import get_autonomy_config
-    from autonomy import collector, aux_model, session_spawn
+    from autonomy import aux_model, session_spawn, collector
 
     if config is None:
         config = get_autonomy_config()
@@ -90,6 +90,14 @@ def run_autonomy_cycle(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any
             fired = result.get("fired", False)
             status["fired"] = fired
             status["session_id"] = result.get("session_id", "")
+
+            # --- Record signal cooldowns after a successful wake ---
+            if fired:
+                signal_ids = [
+                    s.get("signal_id", "") for s in decision.get("signals", [])
+                    if s.get("signal_id")
+                ]
+                collector.record_signal_cooldowns(signal_ids, config)
 
         collector.commit_cycle(snapshot, session_fired=fired)
 
