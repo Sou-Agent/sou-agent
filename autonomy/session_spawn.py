@@ -713,7 +713,7 @@ def _satisfy_drives_for_session(decision: Dict[str, Any],
             satisfied[implied] = max(satisfied.get(implied, 0.0), 0.3)
 
     response_length = len(final_response.strip())
-    scale = max(0.3, min(1.2, response_length / 500.0))
+    scale = max(0.6, min(1.2, response_length / 500.0))
     if response_length < 20:
         scale *= 0.5
 
