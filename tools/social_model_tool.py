@@ -109,7 +109,7 @@ _SCHEMA = {
                 ),
             },
             "value": {
-                "description": "[update] New value for the field.",
+                "description": "[update] New value for the field. For relationship_quality and desired_outreach_interval_hours use a number (float). For known_interests, known_challenges use a list of strings. For other fields use a string.",
             },
             "topic": {
                 "type": "string",
