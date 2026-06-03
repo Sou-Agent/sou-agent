@@ -111,12 +111,80 @@ def _humanize_gap(delta: Optional[timedelta]) -> str:
 # Per-signal_id cooldown: if "social:bailey" was handled, "social:bailey"
 # won't fire again until the cooldown expires. Other signal_ids with
 # different keys (e.g. "social:thon") are unaffected.
+#
+# Drive-family cooldown: when any signal from a drive family fires a session,
+# ALL signals belonging to that drive family are suppressed for the cooldown
+# window. This prevents cross-collector signal aliasing — e.g. the connection
+# drive surfacing as drive:connection, then re-surfacing as social:bailey
+# minutes later through a different collector.
 _COOLDOWN_SIGNAL_TYPES = (
     "social:", "drive:", "prospection:", "world_model:",
     "narrative:", "values:", "research:", "metacognitive:",
     "offline:", "contact:", "curiosity:", "spiral:",
 )
 _DEFAULT_COOLDOWN_HOURS = 4
+
+# Drive-family mapping: signal_id prefix → drive family name.
+# When any signal with this prefix fires a session, all signals whose
+# prefix maps to the same drive family are suppressed.
+# "drive:" is special — the family is extracted from the suffix
+# (e.g. "drive:connection" → family "connection").
+_DRIVE_FAMILY_PREFIX_MAP = {
+    "social:": "connection",
+    "contact:": "connection",
+    "prospection:": "reflection",
+    "narrative:": "expression",
+    "values:": "reflection",
+    "research:": "curiosity",
+    "curiosity:": "curiosity",
+    "metacognitive:": "growth",
+    "spiral:": "reflection",
+    "offline:": "reflection",
+    # world_model varies by node_type — resolved dynamically in _resolve_drive_family
+    "world_model:": None,  # dynamic
+}
+
+
+def _resolve_drive_family(signal_id: str, signal: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Determine which drive family a signal belongs to.
+
+    Returns a drive family name ("connection", "curiosity", "expression",
+    "reflection", "play", "growth") or None if the signal doesn't belong
+    to any drive family.
+
+    For drive:* signals, the family is the drive name itself (e.g.
+    "drive:connection" → "connection").
+
+    For world_model:* signals, the family depends on the node_type field
+    in the signal dict (person→connection, topic→curiosity, project→growth,
+    question→curiosity).
+    """
+    if not signal_id:
+        return None
+
+    # drive:* signals: family = the drive name from the signal
+    if signal_id.startswith("drive:"):
+        if signal and "drive" in signal:
+            return signal["drive"]
+        # Fallback: extract from signal_id suffix
+        return signal_id.split(":", 1)[1] if ":" in signal_id else None
+
+    # world_model:* signals: family depends on node_type
+    if signal_id.startswith("world_model:"):
+        node_type = (signal or {}).get("node_type", "")
+        if node_type == "person":
+            return "connection"
+        elif node_type == "project":
+            return "growth"
+        else:  # topic, question, or unknown
+            return "curiosity"
+
+    # Static prefix mapping
+    for prefix, family in _DRIVE_FAMILY_PREFIX_MAP.items():
+        if family and signal_id.startswith(prefix):
+            return family
+
+    return None
 
 
 def _is_cooldown_eligible(signal_id: str) -> bool:
@@ -127,6 +195,14 @@ def _is_cooldown_eligible(signal_id: str) -> bool:
 def _get_cooldowns(state: Dict[str, Any]) -> Dict[str, str]:
     """Extract the cooldowns dict from cycle state."""
     raw = state.get("signal_cooldowns")
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _get_drive_family_cooldowns(state: Dict[str, Any]) -> Dict[str, str]:
+    """Extract the drive-family cooldowns dict from cycle state."""
+    raw = state.get("drive_family_cooldowns")
     if isinstance(raw, dict):
         return raw
     return {}
@@ -159,6 +235,40 @@ def _apply_cooldowns(
     return out
 
 
+def _apply_drive_family_cooldowns(
+    signals: List[Dict[str, Any]],
+    drive_family_cooldowns: Dict[str, str],
+    now: datetime,
+) -> List[Dict[str, Any]]:
+    """Filter out signals whose drive family is within a cooldown window.
+
+    This is the second layer of cooldown defence. Even if a specific signal_id
+    hasn't fired recently, if its drive family (e.g. "connection") was satisfied
+    by any signal in that family during the last session, the signal is suppressed.
+    """
+    if not drive_family_cooldowns or not signals:
+        return list(signals) if signals else []
+    out = []
+    for signal in signals:
+        sid = signal.get("signal_id", "")
+        if not sid:
+            out.append(signal)
+            continue
+        family = _resolve_drive_family(sid, signal)
+        if family:
+            expiry_str = drive_family_cooldowns.get(family)
+            if expiry_str:
+                expiry = _parse_iso(expiry_str)
+                if expiry and now < expiry:
+                    logger.debug(
+                        "collector: suppressed %s (drive family %s cooldown until %s)",
+                        sid, family, expiry.isoformat(),
+                    )
+                    continue
+        out.append(signal)
+    return out
+
+
 def record_signal_cooldowns(
     signal_ids: List[str],
     config: Optional[Dict[str, Any]] = None,
@@ -166,8 +276,13 @@ def record_signal_cooldowns(
 ) -> None:
     """Persist cooldowns for the given signal_ids.
 
-    Only cooldown-eligible types are recorded. Once set, the same signal_id
-    won't re-trigger until the cooldown window expires.
+    Records two layers:
+    1. Per-signal_id: the exact signal_id won't re-trigger until cooldown expires.
+    2. Per-drive-family: all signals belonging to the same drive family are
+       suppressed. E.g. if "drive:connection" fires, then "social:bailey",
+       "contact:thon", etc. are also suppressed for the same window.
+
+    Only cooldown-eligible types are recorded.
     """
     if not signal_ids:
         return
@@ -178,6 +293,7 @@ def record_signal_cooldowns(
     now = _now()
     state = _load_cycle_state()
     cooldowns = _get_cooldowns(state)
+    drive_family_cooldowns = _get_drive_family_cooldowns(state)
     expiry = now + timedelta(hours=duration_hours)
     expiry_str = expiry.isoformat(timespec="seconds")
     any_new = False
@@ -185,9 +301,15 @@ def record_signal_cooldowns(
         if _is_cooldown_eligible(sid):
             cooldowns[sid] = expiry_str
             logger.debug("collector: cooldown %s → %s", sid, expiry_str)
+            # Also record drive-family cooldown
+            family = _resolve_drive_family(sid)
+            if family:
+                drive_family_cooldowns[family] = expiry_str
+                logger.debug("collector: drive family cooldown %s → %s", family, expiry_str)
             any_new = True
     if any_new:
         state["signal_cooldowns"] = cooldowns
+        state["drive_family_cooldowns"] = drive_family_cooldowns
         save_cycle_state(state)
 
 
@@ -203,6 +325,16 @@ def _prune_expired_cooldowns(state: Dict[str, Any], now: datetime) -> Dict[str, 
         logger.debug("collector: cooldown expired for %s", sid)
     if expired:
         state["signal_cooldowns"] = cooldowns
+    # Also prune expired drive-family cooldowns
+    drive_families = _get_drive_family_cooldowns(state)
+    if drive_families:
+        expired_families = [fam for fam, es in drive_families.items()
+                            if (exp := _parse_iso(es)) and now >= exp]
+        for fam in expired_families:
+            del drive_families[fam]
+            logger.debug("collector: drive family cooldown expired for %s", fam)
+        if expired_families:
+            state["drive_family_cooldowns"] = drive_families
     return state
 
 
@@ -895,6 +1027,24 @@ def collect_state(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         contact_signals = _apply_cooldowns(contact_signals, cooldowns, now)
         curiosity_signals = _apply_cooldowns(curiosity_signals, cooldowns, now)
         spiral_signals = _apply_cooldowns(spiral_signals, cooldowns, now)
+
+    # --- Apply drive-family cooldowns (second layer) ---
+    # Even if a specific signal_id wasn't handled, if its drive family was
+    # satisfied in a recent session, suppress all family members.
+    drive_families = _get_drive_family_cooldowns(cycle_state)
+    if drive_families:
+        drive_signals = _apply_drive_family_cooldowns(drive_signals, drive_families, now)
+        social_signals = _apply_drive_family_cooldowns(social_signals, drive_families, now)
+        world_model_signals = _apply_drive_family_cooldowns(world_model_signals, drive_families, now)
+        research_signals = _apply_drive_family_cooldowns(research_signals, drive_families, now)
+        narrative_signals = _apply_drive_family_cooldowns(narrative_signals, drive_families, now)
+        values_signals = _apply_drive_family_cooldowns(values_signals, drive_families, now)
+        prospection_signals = _apply_drive_family_cooldowns(prospection_signals, drive_families, now)
+        metacognitive_signals = _apply_drive_family_cooldowns(metacognitive_signals, drive_families, now)
+        offline_signals = _apply_drive_family_cooldowns(offline_signals, drive_families, now)
+        contact_signals = _apply_drive_family_cooldowns(contact_signals, drive_families, now)
+        curiosity_signals = _apply_drive_family_cooldowns(curiosity_signals, drive_families, now)
+        spiral_signals = _apply_drive_family_cooldowns(spiral_signals, drive_families, now)
 
     snapshot.update({
         "triggered_intents": triggered_intents,
